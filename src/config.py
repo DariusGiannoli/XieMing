@@ -1,28 +1,24 @@
-import os
+# src/config.py
 from pathlib import Path
 
-# 1. Get the absolute path of the project root
-# This works no matter where you run the script from
-FILE_PATH = Path(__file__).resolve()
-PROJECT_ROOT = FILE_PATH.parent.parent  # Go up two levels (src -> root)
+# Get project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# 2. Define Key Directories
+# Data Paths
 DATA_DIR = PROJECT_ROOT / "data"
-MODELS_DIR = PROJECT_ROOT / "models"
-RESULTS_DIR = PROJECT_ROOT / "results"
-SRC_DIR = PROJECT_ROOT / "src"
+ARTROOM_DIR = DATA_DIR / "artroom"
+BIRD_YOLO_DIR = ARTROOM_DIR / "bird" / "yolo"
+BIRD_YAML = BIRD_YOLO_DIR / "bird_data.yaml"
 
-# 3. Define Model Paths (Single Source of Truth)
+# Model Paths
+MODEL_DIR = PROJECT_ROOT / "models"
 MODEL_PATHS = {
-    "yolo": MODELS_DIR / "yolov8n.pt",
-    "mobilenet": MODELS_DIR / "mobilenet_v3.pth",
-    "resnet": MODELS_DIR / "resnet18.pth",
-    # The compiled C++ executable path
-    "rce_cpp_exe": SRC_DIR / "cpp_engine" / "build" / "rce_engine"
+    # 'yolo': MODEL_DIR / "yolov8n.pt",
+    'yolo' : PROJECT_ROOT / "volov8n.pt", 
+    'resnet': MODEL_DIR / "resnet18.pth",
+    'resnet_head': MODEL_DIR / "resnet18_head.pkl",
+    'mobilenet': MODEL_DIR / "mobilenet_v3.pth"
 }
 
-# 4. Create directories if they don't exist
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR / "logs", exist_ok=True)
-os.makedirs(RESULTS_DIR / "plots", exist_ok=True)
+# Training Results
+TRAINING_DIR = PROJECT_ROOT / "training"
