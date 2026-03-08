@@ -5,25 +5,7 @@ import plotly.graph_objects as go
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.detectors.rce.features import REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# Cached model loaders — instantiated once, reused across reruns
-# ---------------------------------------------------------------------------
-@st.cache_resource
-def load_resnet():
-    from src.detectors.resnet import ResNetDetector
-    return ResNetDetector()
-
-@st.cache_resource
-def load_mobilenet():
-    from src.detectors.mobilenet import MobileNetDetector
-    return MobileNetDetector()
-
-@st.cache_resource
-def load_mobilevit():
-    from src.detectors.mobilevit import MobileViTDetector
-    return MobileViTDetector()
+from src.models import BACKBONES
 
 st.set_page_config(page_title="Feature Lab", layout="wide")
 
@@ -86,22 +68,16 @@ with col_rce:
 # ---------------------------------------------------------------------------
 with col_cnn:
     st.header("🧠 CNN: Static Architecture")
-    selected_cnn = st.selectbox("Compare against Model", ["ResNet-18", "MobileViT-XXS", "MobileNetV3"])
+    selected_cnn = st.selectbox("Compare against Model", list(BACKBONES.keys()))
     st.info("CNN features are fixed by pre-trained weights. You cannot toggle them like the RCE.")
 
     with st.spinner(f"Loading {selected_cnn} and extracting activations..."):
         try:
-            if selected_cnn == "ResNet-18":
-                detector = load_resnet()
-                layer_name = "layer4 (last conv block)"
-            elif selected_cnn == "MobileViT-XXS":
-                detector = load_mobilevit()
-                layer_name = "stages[-1] (last transformer stage)"
-            else:
-                detector = load_mobilenet()
-                layer_name = "features[-1] (last features block)"
+            bmeta = BACKBONES[selected_cnn]
+            backbone = bmeta["loader"]()       # cached frozen backbone
+            layer_name = bmeta["hook_layer"]
 
-            act_maps = detector.get_activation_maps(obj, n_maps=6)
+            act_maps = backbone.get_activation_maps(obj, n_maps=6)
             st.caption(f"Hooked layer: `{layer_name}` — showing 6 of {len(act_maps)} channels")
             act_cols = st.columns(3)
             for i, amap in enumerate(act_maps):

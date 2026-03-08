@@ -7,6 +7,7 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.detectors.rce.features import REGISTRY
+from src.models import BACKBONES, RecognitionHead
 
 st.set_page_config(page_title="Model Tuning", layout="wide")
 st.title("⚙️ Model Tuning: Train & Compare")
@@ -24,31 +25,6 @@ crop_aug  = assets.get("crop_aug", crop)  # augmented crop from Data Lab
 left_img  = assets["left"]           # full left image
 bbox      = assets.get("crop_bbox", (0, 0, crop.shape[1], crop.shape[0]))
 active_modules = st.session_state.get("active_modules", {k: True for k in REGISTRY})
-
-
-# ---------------------------------------------------------------------------
-# Cached model loaders
-# ---------------------------------------------------------------------------
-@st.cache_resource
-def load_resnet():
-    from src.detectors.resnet import ResNetDetector
-    return ResNetDetector()
-
-@st.cache_resource
-def load_mobilenet():
-    from src.detectors.mobilenet import MobileNetDetector
-    return MobileNetDetector()
-
-@st.cache_resource
-def load_mobilevit():
-    from src.detectors.mobilevit import MobileViTDetector
-    return MobileViTDetector()
-
-CNN_MODELS = {
-    "ResNet-18":      {"loader": load_resnet,    "dim": 512},
-    "MobileNetV3":    {"loader": load_mobilenet,  "dim": 576},
-    "MobileViT-XXS":  {"loader": load_mobilevit,  "dim": 320},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +113,6 @@ with col_rce:
 
     if st.button("🚀 Train RCE Head"):
         images, labels = build_training_set()
-        from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import accuracy_score
 
         progress = st.progress(0, text="Extracting RCE features...")
@@ -151,12 +126,11 @@ with col_rce:
         progress.progress(1.0, text="Fitting Logistic Regression...")
 
         t0 = time.perf_counter()
-        head = LogisticRegression(max_iter=rce_max_iter, C=rce_C)
-        head.fit(X, labels)
+        head = RecognitionHead(C=rce_C, max_iter=rce_max_iter).fit(X, labels)
         train_time = time.perf_counter() - t0
         progress.progress(1.0, text="✅ Training complete!")
 
-        preds = head.predict(X)
+        preds = head.model.predict(X)
         train_acc = accuracy_score(labels, preds)
 
         st.success(f"Trained in **{train_time:.2f}s**")
@@ -184,10 +158,9 @@ with col_rce:
         head = st.session_state["rce_head"]
         t0 = time.perf_counter()
         vec = build_rce_vector(crop_aug)
-        probs = head.predict_proba([vec])[0]
+        label, conf = head.predict(vec)
         dt = (time.perf_counter() - t0) * 1000
-        idx = np.argmax(probs)
-        st.write(f"**{head.classes_[idx]}** — {probs[idx]:.1%} confidence — {dt:.1f} ms")
+        st.write(f"**{label}** — {conf:.1%} confidence — {dt:.1f} ms")
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +169,8 @@ with col_rce:
 with col_cnn:
     st.header("🧠 CNN Fine-Tuning")
 
-    selected = st.selectbox("Select Model", list(CNN_MODELS.keys()))
-    meta = CNN_MODELS[selected]
+    selected = st.selectbox("Select Model", list(BACKBONES.keys()))
+    meta = BACKBONES[selected]
     st.caption(f"Backbone embedding: **{meta['dim']}D** → Logistic Regression head")
 
     st.subheader("Training Parameters")
@@ -208,28 +181,26 @@ with col_cnn:
 
     if st.button(f"🚀 Train {selected} Head"):
         images, labels = build_training_set()
-        detector = meta["loader"]()
+        backbone = meta["loader"]()          # cached frozen backbone
 
-        from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import accuracy_score
 
         progress = st.progress(0, text=f"Extracting {selected} features...")
         n = len(images)
         X = []
         for i, img in enumerate(images):
-            X.append(detector._get_features(img))
+            X.append(backbone.get_features(img))
             progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
 
         X = np.array(X)
         progress.progress(1.0, text="Fitting Logistic Regression...")
 
         t0 = time.perf_counter()
-        head = LogisticRegression(max_iter=cnn_max_iter, C=cnn_C)
-        head.fit(X, labels)
+        head = RecognitionHead(C=cnn_C, max_iter=cnn_max_iter).fit(X, labels)
         train_time = time.perf_counter() - t0
         progress.progress(1.0, text="✅ Training complete!")
 
-        preds = head.predict(X)
+        preds = head.model.predict(X)
         train_acc = accuracy_score(labels, preds)
 
         st.success(f"Trained in **{train_time:.2f}s**")
@@ -254,14 +225,13 @@ with col_cnn:
     if f"cnn_head_{selected}" in st.session_state:
         st.divider()
         st.subheader("Quick Predict (Crop)")
-        detector = meta["loader"]()
+        backbone = meta["loader"]()          # cached frozen backbone
         head = st.session_state[f"cnn_head_{selected}"]
         t0 = time.perf_counter()
-        feats = detector._get_features(crop_aug)
-        probs = head.predict_proba([feats])[0]
+        feats = backbone.get_features(crop_aug)
+        label, conf = head.predict(feats)
         dt = (time.perf_counter() - t0) * 1000
-        idx = np.argmax(probs)
-        st.write(f"**{head.classes_[idx]}** — {probs[idx]:.1%} confidence — {dt:.1f} ms")
+        st.write(f"**{label}** — {conf:.1%} confidence — {dt:.1f} ms")
 
 
 # ===========================================================================
@@ -275,11 +245,11 @@ rows = []
 if rce_acc is not None:
     rows.append({"Model": "RCE", "Train Accuracy": f"{rce_acc:.1%}",
                  "Vector Size": str(sum(10 for k in active_modules if active_modules[k]))})
-for name in CNN_MODELS:
+for name in BACKBONES:
     acc = st.session_state.get(f"cnn_acc_{name}")
     if acc is not None:
         rows.append({"Model": name, "Train Accuracy": f"{acc:.1%}",
-                     "Vector Size": f"{CNN_MODELS[name]['dim']}D"})
+                     "Vector Size": f"{BACKBONES[name]['dim']}D"})
 
 if rows:
     import pandas as pd
