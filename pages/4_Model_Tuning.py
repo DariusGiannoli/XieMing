@@ -12,15 +12,17 @@ st.set_page_config(page_title="Model Tuning", layout="wide")
 st.title("⚙️ Model Tuning: Train & Compare")
 
 # ---------------------------------------------------------------------------
-# Guard: require Data Lab & Feature Lab completion
+# Guard: require Data Lab completion
 # ---------------------------------------------------------------------------
 if "pipeline_data" not in st.session_state or "crop" not in st.session_state.get("pipeline_data", {}):
     st.error("Please complete the **Data Lab** first (upload assets & define a crop).")
     st.stop()
 
 assets = st.session_state["pipeline_data"]
-crop = assets.get("crop_aug", assets["crop"])
-crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+crop      = assets["crop"]           # original crop from Data Lab
+crop_aug  = assets.get("crop_aug", crop)  # augmented crop from Data Lab
+left_img  = assets["left"]           # full left image
+bbox      = assets.get("crop_bbox", (0, 0, crop.shape[1], crop.shape[0]))
 active_modules = st.session_state.get("active_modules", {k: True for k in REGISTRY})
 
 
@@ -50,27 +52,42 @@ CNN_MODELS = {
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Build training set from session data (no disk reads)
 # ---------------------------------------------------------------------------
-def load_training_images():
-    """Scan the data folder for bird/background images."""
-    from pathlib import Path
-    from src.config import PROJECT_ROOT
-    train_dir = PROJECT_ROOT / "data/artroom/bird/yolo/train/images"
-    images, labels = [], []
-    if not train_dir.exists():
-        return images, labels
-    for img_file in sorted(train_dir.glob("*.png")):
-        img = cv2.imread(str(img_file))
-        if img is None:
+def build_training_set(augment_fn=None):
+    """
+    Positive samples:  original crop + augmented crop from Data Lab.
+    Negative samples:  random patches from the left image that do NOT
+                       overlap with the crop bounding box.
+    Returns (images_list, labels_list).
+    """
+    positives = [crop, crop_aug]
+    if augment_fn is not None:
+        positives.append(augment_fn(crop))
+
+    # --- Generate negatives from left image margins ---
+    x0, y0, x1, y1 = bbox
+    H, W = left_img.shape[:2]
+    ch, cw = y1 - y0, x1 - x0  # crop height/width
+    negatives = []
+    rng = np.random.default_rng(42)
+
+    attempts = 0
+    while len(negatives) < len(positives) * 2 and attempts < 200:
+        # Random patch of same size as crop
+        rx = rng.integers(0, max(W - cw, 1))
+        ry = rng.integers(0, max(H - ch, 1))
+        # Reject if it overlaps the crop bbox (IoU > 0)
+        if rx < x1 and rx + cw > x0 and ry < y1 and ry + ch > y0:
+            attempts += 1
             continue
-        fname = img_file.name.lower()
-        if "bird" in fname:
-            images.append(img)
-            labels.append("bird")
-        elif any(x in fname for x in ["room", "wall", "floor", "empty"]):
-            images.append(img)
-            labels.append("background")
+        patch = left_img[ry:ry+ch, rx:rx+cw]
+        if patch.shape[0] > 0 and patch.shape[1] > 0:
+            negatives.append(patch)
+        attempts += 1
+
+    images = positives + negatives
+    labels = ["object"] * len(positives) + ["background"] * len(negatives)
     return images, labels
 
 
@@ -86,6 +103,17 @@ def build_rce_vector(img_bgr):
 
 
 # ===================================================================
+# Show data used for training
+# ===================================================================
+st.subheader("Training Data (from Data Lab)")
+st.caption("Positives = your crop + augmented crop  |  Negatives = random non-overlapping patches from left image")
+td1, td2 = st.columns(2)
+td1.image(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), caption="Original Crop (positive)", width=180)
+td2.image(cv2.cvtColor(crop_aug, cv2.COLOR_BGR2RGB), caption="Augmented Crop (positive)", width=180)
+
+st.divider()
+
+# ===================================================================
 # LAYOUT: LEFT = RCE  |  RIGHT = CNN
 # ===================================================================
 col_rce, col_cnn = st.columns(2)
@@ -96,88 +124,66 @@ col_rce, col_cnn = st.columns(2)
 with col_rce:
     st.header("🧬 RCE Training")
 
-    # Show active modules
     active_names = [REGISTRY[k]["label"] for k in active_modules if active_modules[k]]
     if not active_names:
         st.error("No RCE modules selected. Go back to Feature Lab.")
         st.stop()
-
     st.write(f"**Active modules:** {', '.join(active_names)}")
-    st.image(crop_rgb, caption="Training Crop", width=200)
 
-    # Training config
     st.subheader("Training Parameters")
     rce_C = st.slider("Regularization (C)", 0.01, 10.0, 1.0, step=0.01,
                        help="Higher = less regularization, may overfit")
     rce_max_iter = st.slider("Max Iterations", 100, 5000, 1000, step=100)
 
     if st.button("🚀 Train RCE Head"):
-        images, labels = load_training_images()
-        if not images:
-            st.error("No training images found in `data/artroom/bird/yolo/train/images/`")
-        else:
-            from sklearn.linear_model import LogisticRegression
-            import joblib
-            from src.config import MODEL_PATHS
+        images, labels = build_training_set()
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import accuracy_score
 
-            # Progress
-            progress = st.progress(0, text="Extracting RCE features...")
-            n = len(images)
-            X = []
-            for i, img in enumerate(images):
-                X.append(build_rce_vector(img))
-                progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
+        progress = st.progress(0, text="Extracting RCE features...")
+        n = len(images)
+        X = []
+        for i, img in enumerate(images):
+            X.append(build_rce_vector(img))
+            progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
 
-            X = np.array(X)
-            progress.progress(1.0, text="Fitting Logistic Regression...")
+        X = np.array(X)
+        progress.progress(1.0, text="Fitting Logistic Regression...")
 
-            t0 = time.perf_counter()
-            head = LogisticRegression(max_iter=rce_max_iter, C=rce_C)
-            head.fit(X, labels)
-            train_time = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        head = LogisticRegression(max_iter=rce_max_iter, C=rce_C)
+        head.fit(X, labels)
+        train_time = time.perf_counter() - t0
+        progress.progress(1.0, text="✅ Training complete!")
 
-            # Save
-            head_path = str(MODEL_PATHS.get("rce_model", "models/rce_model.pkl"))
-            joblib.dump(head, head_path)
+        preds = head.predict(X)
+        train_acc = accuracy_score(labels, preds)
 
-            progress.progress(1.0, text="✅ Training complete!")
+        st.success(f"Trained in **{train_time:.2f}s**")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Train Accuracy", f"{train_acc:.1%}")
+        m2.metric("Vector Size", f"{X.shape[1]} floats")
+        m3.metric("Samples", f"{len(images)}")
 
-            # --- Results ---
-            st.success(f"Trained in **{train_time:.2f}s** — saved to `{head_path}`")
+        probs = head.predict_proba(X)
+        fig = go.Figure()
+        for ci, cls in enumerate(head.classes_):
+            fig.add_trace(go.Histogram(x=probs[:, ci], name=cls, opacity=0.7, nbinsx=20))
+        fig.update_layout(title="Confidence Distribution", barmode="overlay",
+                          template="plotly_dark", height=280,
+                          xaxis_title="Confidence", yaxis_title="Count")
+        st.plotly_chart(fig, use_container_width=True)
 
-            # Metrics
-            from sklearn.metrics import accuracy_score
-            preds = head.predict(X)
-            train_acc = accuracy_score(labels, preds)
+        # Store head in session (no disk save)
+        st.session_state["rce_head"] = head
+        st.session_state["rce_train_acc"] = train_acc
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Train Accuracy", f"{train_acc:.1%}")
-            m2.metric("Vector Size", f"{X.shape[1]} floats")
-            m3.metric("Train Time", f"{train_time:.2f}s")
-
-            # Confidence distribution chart
-            probs = head.predict_proba(X)
-            fig = go.Figure()
-            for ci, cls in enumerate(head.classes_):
-                fig.add_trace(go.Histogram(
-                    x=probs[:, ci], name=cls, opacity=0.7, nbinsx=20
-                ))
-            fig.update_layout(title="Confidence Distribution",
-                              barmode="overlay", template="plotly_dark", height=280,
-                              xaxis_title="Confidence", yaxis_title="Count")
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Store
-            st.session_state["rce_head"] = head
-            st.session_state["rce_train_acc"] = train_acc
-
-    # Sanity-check predict
     if "rce_head" in st.session_state:
         st.divider()
         st.subheader("Quick Predict (Crop)")
         head = st.session_state["rce_head"]
         t0 = time.perf_counter()
-        vec = build_rce_vector(crop)
+        vec = build_rce_vector(crop_aug)
         probs = head.predict_proba([vec])[0]
         dt = (time.perf_counter() - t0) * 1000
         idx = np.argmax(probs)
@@ -192,11 +198,8 @@ with col_cnn:
 
     selected = st.selectbox("Select Model", list(CNN_MODELS.keys()))
     meta = CNN_MODELS[selected]
-
     st.caption(f"Backbone embedding: **{meta['dim']}D** → Logistic Regression head")
-    st.image(crop_rgb, caption="Training Crop", width=200)
 
-    # Training config
     st.subheader("Training Parameters")
     cnn_C = st.slider("Regularization (C) ", 0.01, 10.0, 1.0, step=0.01,
                        key="cnn_c", help="Higher = less regularization")
@@ -204,70 +207,57 @@ with col_cnn:
                               key="cnn_iter")
 
     if st.button(f"🚀 Train {selected} Head"):
-        images, labels = load_training_images()
-        if not images:
-            st.error("No training images found in `data/artroom/bird/yolo/train/images/`")
-        else:
-            detector = meta["loader"]()
+        images, labels = build_training_set()
+        detector = meta["loader"]()
 
-            progress = st.progress(0, text=f"Extracting {selected} features...")
-            n = len(images)
-            X = []
-            for i, img in enumerate(images):
-                X.append(detector._get_features(img))
-                progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import accuracy_score
 
-            X = np.array(X)
-            progress.progress(1.0, text="Fitting Logistic Regression...")
+        progress = st.progress(0, text=f"Extracting {selected} features...")
+        n = len(images)
+        X = []
+        for i, img in enumerate(images):
+            X.append(detector._get_features(img))
+            progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
 
-            from sklearn.linear_model import LogisticRegression
-            t0 = time.perf_counter()
-            head = LogisticRegression(max_iter=cnn_max_iter, C=cnn_C)
-            head.fit(X, labels)
-            train_time = time.perf_counter() - t0
+        X = np.array(X)
+        progress.progress(1.0, text="Fitting Logistic Regression...")
 
-            # Assign head to detector and save
-            detector.head = head
-            import joblib
-            if hasattr(detector, "head_path") and detector.head_path:
-                joblib.dump(head, detector.head_path)
+        t0 = time.perf_counter()
+        head = LogisticRegression(max_iter=cnn_max_iter, C=cnn_C)
+        head.fit(X, labels)
+        train_time = time.perf_counter() - t0
+        progress.progress(1.0, text="✅ Training complete!")
 
-            progress.progress(1.0, text="✅ Training complete!")
+        preds = head.predict(X)
+        train_acc = accuracy_score(labels, preds)
 
-            st.success(f"Trained in **{train_time:.2f}s**")
+        st.success(f"Trained in **{train_time:.2f}s**")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Train Accuracy", f"{train_acc:.1%}")
+        m2.metric("Vector Size", f"{X.shape[1]}D")
+        m3.metric("Samples", f"{len(images)}")
 
-            from sklearn.metrics import accuracy_score
-            preds = head.predict(X)
-            train_acc = accuracy_score(labels, preds)
+        probs = head.predict_proba(X)
+        fig = go.Figure()
+        for ci, cls in enumerate(head.classes_):
+            fig.add_trace(go.Histogram(x=probs[:, ci], name=cls, opacity=0.7, nbinsx=20))
+        fig.update_layout(title="Confidence Distribution", barmode="overlay",
+                          template="plotly_dark", height=280,
+                          xaxis_title="Confidence", yaxis_title="Count")
+        st.plotly_chart(fig, use_container_width=True)
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Train Accuracy", f"{train_acc:.1%}")
-            m2.metric("Vector Size", f"{X.shape[1]}D")
-            m3.metric("Train Time", f"{train_time:.2f}s")
+        # Store head in session (no disk save)
+        st.session_state[f"cnn_head_{selected}"] = head
+        st.session_state[f"cnn_acc_{selected}"] = train_acc
 
-            # Confidence distribution
-            probs = head.predict_proba(X)
-            fig = go.Figure()
-            for ci, cls in enumerate(head.classes_):
-                fig.add_trace(go.Histogram(
-                    x=probs[:, ci], name=cls, opacity=0.7, nbinsx=20
-                ))
-            fig.update_layout(title="Confidence Distribution",
-                              barmode="overlay", template="plotly_dark", height=280,
-                              xaxis_title="Confidence", yaxis_title="Count")
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.session_state[f"cnn_head_{selected}"] = head
-            st.session_state[f"cnn_acc_{selected}"] = train_acc
-
-    # Sanity-check predict
     if f"cnn_head_{selected}" in st.session_state:
         st.divider()
         st.subheader("Quick Predict (Crop)")
         detector = meta["loader"]()
         head = st.session_state[f"cnn_head_{selected}"]
         t0 = time.perf_counter()
-        feats = detector._get_features(crop)
+        feats = detector._get_features(crop_aug)
         probs = head.predict_proba([feats])[0]
         dt = (time.perf_counter() - t0) * 1000
         idx = np.argmax(probs)
@@ -284,9 +274,7 @@ rce_acc = st.session_state.get("rce_train_acc")
 rows = []
 if rce_acc is not None:
     rows.append({"Model": "RCE", "Train Accuracy": f"{rce_acc:.1%}",
-                 "Vector Size": str(sum(
-                     10 for k in active_modules if active_modules[k]
-                 ))})
+                 "Vector Size": str(sum(10 for k in active_modules if active_modules[k]))})
 for name in CNN_MODELS:
     acc = st.session_state.get(f"cnn_acc_{name}")
     if acc is not None:
