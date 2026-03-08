@@ -28,7 +28,22 @@ RUN pip install --no-cache-dir \
     torch torchvision \
     -r requirements.txt
 
-# 6. Copy the rest of the project
+# 6. Pre-download backbone weights at BUILD time so they are baked into the
+#    image layer and never re-fetched at runtime.
+#    Weights are cached to $HOME/.cache/{torch,huggingface} inside the image.
+RUN python - <<'EOF'
+import torchvision.models as m
+print("Downloading ResNet-18...")
+m.resnet18(weights=m.ResNet18_Weights.DEFAULT)
+print("Downloading MobileNetV3-Small...")
+m.mobilenet_v3_small(weights=m.MobileNet_V3_Small_Weights.DEFAULT)
+print("Downloading MobileViT-XXS...")
+import timm
+timm.create_model("mobilevit_xxs.cvnets_in1k", pretrained=True, num_classes=0)
+print("All backbone weights cached.")
+EOF
+
+# 7. Copy the rest of the project
 COPY --chown=user . .
 
 # 7. Expose Streamlit port
