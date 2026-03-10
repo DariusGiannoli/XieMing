@@ -1,0 +1,7 @@
+path: /Users/dariusgiannoli/Desktop/Recognition-BenchMark/data/artroom/bird/yolo
+train: train/images
+val: train/images
+
+# Classes
+nc: 1
+names: ['bird']
