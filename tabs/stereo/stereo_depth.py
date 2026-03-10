@@ -7,6 +7,8 @@ import re
 import pandas as pd
 import plotly.graph_objects as go
 
+from src.depth_nn import load_depth_anything, predict_depth, align_to_gt
+
 
 def _parse_config(text: str) -> dict:
     params = {}
@@ -161,50 +163,147 @@ def render():
         zc2.image(cv2.cvtColor(gt_color, cv2.COLOR_BGR2RGB),
                   caption="Ground Truth Disparity (from PFM)", use_container_width=True)
 
-    # Step 3 — Error Analysis
+    # Step 3 — Neural Network Depth (Depth Anything V2)
+    st.divider()
+    st.subheader("Step 3: Neural Network Depth (Depth Anything V2 — Small)")
+    st.caption("Monocular depth estimation on the **left image only** — "
+               "no stereo pair needed.  Output is aligned to GT disparity "
+               "via least-squares so metrics are directly comparable with SGBM.")
+
+    run_nn = st.checkbox("Run Depth Anything V2", value=False,
+                         key="stereo_sd_run_nn")
+
+    nn_disp_aligned = None
+    if run_nn:
+        with st.spinner("Running Depth Anything V2 (CPU) …"):
+            nn_raw, nn_ms = predict_depth(img_l)
+        st.success(f"Inference finished in **{nn_ms:.0f} ms**")
+
+        # Align to GT if available, otherwise show raw output
+        if gt_left is not None:
+            nn_disp_aligned = align_to_gt(nn_raw, gt_left)
+        else:
+            nn_disp_aligned = nn_raw
+
+        # Visualise
+        nn_vis = np.clip(nn_disp_aligned, 0, None)
+        nn_max = nn_vis.max() if nn_vis.max() > 0 else 1.0
+        nn_norm = (nn_vis / nn_max * 255).astype(np.uint8)
+        nn_color = cv2.applyColorMap(nn_norm, cv2.COLORMAP_INFERNO)
+
+        nc1, nc2 = st.columns(2)
+        nc1.image(cv2.cvtColor(disp_color, cv2.COLOR_BGR2RGB),
+                  caption="SGBM Disparity", use_container_width=True)
+        nc2.image(cv2.cvtColor(nn_color, cv2.COLOR_BGR2RGB),
+                  caption="Depth Anything V2 (aligned)", use_container_width=True)
+
+    # Step 4 — Comparative Error Analysis
     if gt_left is not None:
         st.divider()
-        st.subheader("Step 3: Error Analysis (SGBM vs Ground Truth)")
+        st.subheader("Step 4: Error Analysis — SGBM vs Depth Anything vs GT")
+
         gt_disp = gt_left
         if gt_disp.shape[:2] != disp.shape[:2]:
             st.warning("GT shape differs from disparity shape. Resizing GT.")
             gt_disp = cv2.resize(gt_disp, (disp.shape[1], disp.shape[0]),
                                  interpolation=cv2.INTER_NEAREST)
         gt_valid = np.isfinite(gt_disp) & (gt_disp > 0)
-        both_valid = valid & gt_valid
-        if both_valid.any():
-            disp_err = np.abs(disp - gt_disp)
-            disp_err[~both_valid] = 0
-            err_vals = disp_err[both_valid]
-            mae  = float(np.mean(err_vals))
-            rmse = float(np.sqrt(np.mean(err_vals ** 2)))
-            bad_2 = float(np.mean(err_vals > 2.0)) * 100
 
+        # --- helper to compute metrics for any disparity map ---
+        def _error_metrics(pred, gt_d, gt_v, valid_pred):
+            both = valid_pred & gt_v
+            if not both.any():
+                return None, None, None, None
+            err = np.abs(pred - gt_d)
+            err[~both] = 0
+            vals = err[both]
+            return (
+                float(np.mean(vals)),
+                float(np.sqrt(np.mean(vals ** 2))),
+                float(np.mean(vals > 2.0)) * 100,
+                err,
+            )
+
+        sgbm_mae, sgbm_rmse, sgbm_bad2, sgbm_err_map = _error_metrics(
+            disp, gt_disp, gt_valid, valid)
+
+        nn_mae = nn_rmse = nn_bad2 = nn_err_map = None
+        if nn_disp_aligned is not None:
+            nn_valid = nn_disp_aligned > 0
+            nn_mae, nn_rmse, nn_bad2, nn_err_map = _error_metrics(
+                nn_disp_aligned, gt_disp, gt_valid, nn_valid)
+
+        # --- Metric cards ---
+        st.markdown("##### Disparity Error Metrics")
+        if nn_mae is not None:
+            col_hdr, col_sgbm, col_nn = st.columns(3)
+            col_hdr.markdown("**Metric**")
+            col_sgbm.markdown("**SGBM**")
+            col_nn.markdown("**Depth Anything**")
+
+            col_hdr2, col_sgbm2, col_nn2 = st.columns(3)
+            col_hdr2.write("MAE (px)")
+            col_sgbm2.write(f"{sgbm_mae:.2f}" if sgbm_mae else "N/A")
+            col_nn2.write(f"{nn_mae:.2f}")
+
+            col_hdr3, col_sgbm3, col_nn3 = st.columns(3)
+            col_hdr3.write("RMSE (px)")
+            col_sgbm3.write(f"{sgbm_rmse:.2f}" if sgbm_rmse else "N/A")
+            col_nn3.write(f"{nn_rmse:.2f}")
+
+            col_hdr4, col_sgbm4, col_nn4 = st.columns(3)
+            col_hdr4.write("Bad-2.0 (%)")
+            col_sgbm4.write(f"{sgbm_bad2:.1f}%" if sgbm_bad2 else "N/A")
+            col_nn4.write(f"{nn_bad2:.1f}%")
+        elif sgbm_mae is not None:
             em1, em2, em3 = st.columns(3)
-            em1.metric("MAE (px)", f"{mae:.2f}")
-            em2.metric("RMSE (px)", f"{rmse:.2f}")
-            em3.metric("Bad-2.0 (%)", f"{bad_2:.1f}%")
+            em1.metric("MAE (px)", f"{sgbm_mae:.2f}")
+            em2.metric("RMSE (px)", f"{sgbm_rmse:.2f}")
+            em3.metric("Bad-2.0 (%)", f"{sgbm_bad2:.1f}%")
 
-            err_clip = np.clip(disp_err, 0, 10)
-            err_norm = (err_clip / 10 * 255).astype(np.uint8)
-            err_color = cv2.applyColorMap(err_norm, cv2.COLORMAP_HOT)
-            st.image(cv2.cvtColor(err_color, cv2.COLOR_BGR2RGB),
-                     caption="Disparity Error Map (clipped at 10 px)",
+        # --- Error maps side-by-side ---
+        def _err_heatmap(err_map):
+            ec = np.clip(err_map, 0, 10)
+            en = (ec / 10 * 255).astype(np.uint8)
+            return cv2.applyColorMap(en, cv2.COLORMAP_HOT)
+
+        if sgbm_err_map is not None and nn_err_map is not None:
+            emc1, emc2 = st.columns(2)
+            emc1.image(cv2.cvtColor(_err_heatmap(sgbm_err_map), cv2.COLOR_BGR2RGB),
+                       caption="SGBM Error (clipped 10 px)",
+                       use_container_width=True)
+            emc2.image(cv2.cvtColor(_err_heatmap(nn_err_map), cv2.COLOR_BGR2RGB),
+                       caption="Depth Anything Error (clipped 10 px)",
+                       use_container_width=True)
+        elif sgbm_err_map is not None:
+            st.image(cv2.cvtColor(_err_heatmap(sgbm_err_map), cv2.COLOR_BGR2RGB),
+                     caption="SGBM Error (clipped 10 px)",
                      use_container_width=True)
 
-            fig = go.Figure(data=[go.Histogram(x=err_vals, nbinsx=50,
-                                               marker_color="#ff6361")])
-            fig.update_layout(title="Disparity Error Distribution",
+        # --- Overlaid histogram ---
+        if sgbm_err_map is not None:
+            both_sgbm = valid & gt_valid
+            sgbm_vals = sgbm_err_map[both_sgbm] if both_sgbm.any() else np.array([])
+            traces = [go.Histogram(x=sgbm_vals, nbinsx=50, name="SGBM",
+                                   marker_color="#ff6361", opacity=0.7)]
+            if nn_err_map is not None:
+                nn_v = (nn_disp_aligned > 0) & gt_valid
+                nn_vals = nn_err_map[nn_v] if nn_v.any() else np.array([])
+                traces.append(go.Histogram(x=nn_vals, nbinsx=50,
+                                           name="Depth Anything",
+                                           marker_color="#58a6ff",
+                                           opacity=0.7))
+            fig = go.Figure(data=traces)
+            fig.update_layout(barmode="overlay",
+                              title="Disparity Error Distribution",
                               xaxis_title="Absolute Error (px)",
                               yaxis_title="Pixel Count",
-                              template="plotly_dark", height=300)
+                              template="plotly_dark", height=350)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No overlapping valid pixels.")
 
-    # Step 4 — Object Distance
+    # Step 5 — Object Distance
     st.divider()
-    st.subheader("Step 4: Object Distance Estimation")
+    st.subheader("Step 5: Object Distance Estimation")
 
     all_dets = []
     all_dets.extend(("RCE", *d) for d in rce_dets)
@@ -220,6 +319,13 @@ def render():
 
     rows = []
     det_overlay = img_l.copy()
+
+    # Build NN depth map (metric) from aligned disparity if available
+    nn_depth_map = None
+    if nn_disp_aligned is not None:
+        nn_valid_d = (nn_disp_aligned + doffs) > 0
+        nn_depth_map = np.zeros_like(nn_disp_aligned)
+        nn_depth_map[nn_valid_d] = (focal * baseline) / (nn_disp_aligned[nn_valid_d] + doffs)
 
     for source, dx1, dy1, dx2, dy2, lbl, conf in all_dets:
         dx1, dy1, dx2, dy2 = int(dx1), int(dy1), int(dx2), int(dy2)
@@ -238,6 +344,14 @@ def render():
         else:
             med_depth = mean_depth = med_disp = 0.0
 
+        # NN depth for this detection ROI
+        nn_med_depth = 0.0
+        if nn_depth_map is not None:
+            nn_roi = nn_depth_map[dy1c:dy2c, dx1c:dx2c]
+            nn_roi_valid = nn_roi[nn_roi > 0]
+            if len(nn_roi_valid) > 0:
+                nn_med_depth = float(np.median(nn_roi_valid))
+
         gt_depth_val = 0.0
         if gt_left is not None:
             gt_roi = gt_left[dy1c:dy2c, dx1c:dx2c]
@@ -246,16 +360,21 @@ def render():
                 gt_med_disp = float(np.median(gt_roi_valid))
                 gt_depth_val = (focal * baseline) / (gt_med_disp + doffs) if (gt_med_disp + doffs) > 0 else 0
 
-        error_mm = abs(med_depth - gt_depth_val) if gt_depth_val > 0 else float("nan")
+        sgbm_err = abs(med_depth - gt_depth_val) if gt_depth_val > 0 else float("nan")
+        nn_err   = abs(nn_med_depth - gt_depth_val) if (gt_depth_val > 0 and nn_med_depth > 0) else float("nan")
 
-        rows.append({
+        row = {
             "Source": source, "Box": f"({dx1},{dy1})→({dx2},{dy2})",
             "Confidence": f"{conf:.1%}" if isinstance(conf, float) else str(conf),
             "Med Disparity": f"{med_disp:.1f} px",
-            "Med Depth": f"{med_depth:.0f} mm", "Mean Depth": f"{mean_depth:.0f} mm",
+            "SGBM Depth": f"{med_depth:.0f} mm",
             "GT Depth": f"{gt_depth_val:.0f} mm" if gt_depth_val > 0 else "N/A",
-            "Error": f"{error_mm:.0f} mm" if not np.isnan(error_mm) else "N/A",
-        })
+            "SGBM Error": f"{sgbm_err:.0f} mm" if not np.isnan(sgbm_err) else "N/A",
+        }
+        if nn_depth_map is not None:
+            row["NN Depth"] = f"{nn_med_depth:.0f} mm" if nn_med_depth > 0 else "N/A"
+            row["NN Error"] = f"{nn_err:.0f} mm" if not np.isnan(nn_err) else "N/A"
+        rows.append(row)
 
         color = (0, 255, 0) if "RCE" in source else (0, 0, 255) if "CNN" in source else (255, 255, 0)
         cv2.rectangle(det_overlay, (dx1c, dy1c), (dx2c, dy2c), color, 2)
@@ -272,6 +391,11 @@ def render():
         st.divider()
         st.subheader("🎯 Primary Detection — Distance")
         bc1, bc2, bc3 = st.columns(3)
-        bc1.metric("Estimated Depth", best["Med Depth"])
+        bc1.metric("SGBM Depth", best["SGBM Depth"])
         bc2.metric("Ground Truth", best["GT Depth"])
-        bc3.metric("Absolute Error", best["Error"])
+        bc3.metric("SGBM Error", best["SGBM Error"])
+        if "NN Depth" in best:
+            nc1, nc2, nc3 = st.columns(3)
+            nc1.metric("NN Depth", best["NN Depth"])
+            nc2.metric("Ground Truth", best["GT Depth"])
+            nc3.metric("NN Error", best["NN Error"])

@@ -41,6 +41,14 @@ print("Downloading MobileViT-XXS...")
 import timm
 timm.create_model("mobilevit_xxs.cvnets_in1k", pretrained=True, num_classes=0)
 print("All backbone weights cached.")
+
+print("Downloading Depth Anything V2 Small...")
+from transformers import pipeline as hf_pipeline
+import torch
+hf_pipeline("depth-estimation",
+            model="depth-anything/Depth-Anything-V2-Small-hf",
+            device="cpu", dtype=torch.float32)
+print("Depth Anything V2 cached.")
 EOF
 
 # 7. Copy the rest of the project
