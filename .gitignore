@@ -5,8 +5,11 @@ models/*.pth
 models/*.onnx
 
 # --- 2. THE DATA (Datasets) ---
-# Data should live locally or in the cloud, not in Git.
-data/
+# Middlebury stereo benchmark scenes are tracked via Git LFS
+# Everything else in data/ (raw custom uploads etc.) stays local
+data/*
+!data/middlebury/
+!data/README.md
 
 # --- 3. THE RESULTS (Logs & Plots) ---
 # You might want to keep the final report, but not every test run.
