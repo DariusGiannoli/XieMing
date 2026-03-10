@@ -32,11 +32,14 @@ with col_rce:
     st.header("🧬 RCE: Modular Physics Engine")
     st.subheader("Select Active Modules")
 
-    # Dynamically build checkboxes from the registry
-    m_cols = st.columns(len(REGISTRY))
+    # Dynamically build checkboxes from the registry (rows of 4)
     active = {}
-    for i, (key, meta) in enumerate(REGISTRY.items()):
-        active[key] = m_cols[i].checkbox(meta["label"], value=True)
+    items = list(REGISTRY.items())
+    for row_start in range(0, len(items), 4):
+        row_items = items[row_start:row_start + 4]
+        m_cols = st.columns(4)
+        for col, (key, meta) in zip(m_cols, row_items):
+            active[key] = col.checkbox(meta["label"], value=(key in ("intensity", "sobel", "spectral")))
 
     # Build vector + collect visualizations by calling registry functions
     final_vector = []
@@ -47,12 +50,14 @@ with col_rce:
             final_vector.extend(vec)
             viz_images.append((meta["viz_title"], viz))
 
-    # Visualizations
+    # Visualizations (rows of 3)
     st.divider()
     if viz_images:
-        v_cols = st.columns(len(viz_images))
-        for idx, (title, img) in enumerate(viz_images):
-            v_cols[idx].image(img, caption=title, use_container_width=True)
+        for row_start in range(0, len(viz_images), 3):
+            row = viz_images[row_start:row_start + 3]
+            v_cols = st.columns(3)
+            for col, (title, img) in zip(v_cols, row):
+                col.image(img, caption=title, use_container_width=True)
     else:
         st.warning("No modules selected — vector is empty.")
 
