@@ -25,7 +25,7 @@ PIPELINES = {
         "📈 Evaluation":        "tabs.generalisation.evaluation",
     },
 }
-
+h
 st.sidebar.title("🦅 Recognition BenchMark")
 pipeline_choice = st.sidebar.radio("Pipeline", list(PIPELINES.keys()), key="nav_pipeline")
 
