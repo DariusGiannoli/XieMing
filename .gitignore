@@ -26,15 +26,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-# --- 5. C++ BUILD ARTIFACTS (The Engine) ---
-# Never commit the compiled executable or CMake temp files.
-src/cpp_engine/build/
-src/cpp_engine/bin/
-*.o
-*.so
-*.dylib
-
-# --- 6. SYSTEM & IDE JUNK ---
+# --- 5. SYSTEM & IDE JUNK ---
 # Mac OS specific annoying file
 .DS_Store
 
