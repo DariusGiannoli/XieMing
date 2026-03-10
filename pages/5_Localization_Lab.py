@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.detectors.rce.features import REGISTRY
 from src.models import BACKBONES, RecognitionHead
+from src.utils import build_rce_vector
 from src.localization import (
     exhaustive_sliding_window,
     image_pyramid,
@@ -44,6 +45,11 @@ active_mods = st.session_state.get("active_modules",
 x0, y0, x1, y1 = bbox
 win_h, win_w = y1 - y0, x1 - x0
 
+if win_h <= 0 or win_w <= 0:
+    st.error("Invalid window size from crop bbox. "
+             "Go back to **Data Lab** and redefine the ROI.")
+    st.stop()
+
 rce_head    = st.session_state.get("rce_head")
 has_any_cnn = any(f"cnn_head_{n}" in st.session_state for n in BACKBONES)
 
@@ -56,13 +62,7 @@ if rce_head is None and not has_any_cnn:
 #  RCE feature function
 # ===================================================================
 def rce_feature_fn(patch_bgr):
-    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
-    vec = []
-    for key, meta in REGISTRY.items():
-        if active_mods.get(key, False):
-            v, _ = meta["fn"](gray)
-            vec.extend(v)
-    return np.array(vec, dtype=np.float32)
+    return build_rce_vector(patch_bgr, active_mods)
 
 
 # ===================================================================

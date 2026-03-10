@@ -67,7 +67,7 @@ def exhaustive_sliding_window(image, win_h, win_w, feature_fn, head,
             feats = feature_fn(patch)
             label, conf = head.predict(feats)
             n_proposals += 1
-            if label == "object":
+            if label != "background":
                 heatmap[y:y + win_h, x:x + win_w] = np.maximum(
                     heatmap[y:y + win_h, x:x + win_w], conf)
                 if conf >= conf_thresh:
@@ -109,7 +109,7 @@ def image_pyramid(image, win_h, win_w, feature_fn, head,
                 feats = feature_fn(patch)
                 label, conf = head.predict(feats)
                 n_proposals += 1
-                if label == "object":
+                if label != "background":
                     # Map back to original image coordinates
                     ox  = int(x / scale)
                     oy  = int(y / scale)
@@ -157,7 +157,7 @@ def coarse_to_fine(image, win_h, win_w, feature_fn, head,
             feats = feature_fn(patch)
             label, conf = head.predict(feats)
             n_proposals += 1
-            if label == "object" and conf >= conf_thresh * 0.7:
+            if label != "background" and conf >= conf_thresh * 0.7:
                 hot_spots.append((x, y))
                 heatmap[y:y + win_h, x:x + win_w] = np.maximum(
                     heatmap[y:y + win_h, x:x + win_w], conf)
@@ -178,7 +178,7 @@ def coarse_to_fine(image, win_h, win_w, feature_fn, head,
                 feats = feature_fn(patch)
                 label, conf = head.predict(feats)
                 n_proposals += 1
-                if label == "object":
+                if label != "background":
                     heatmap[y:y + win_h, x:x + win_w] = np.maximum(
                         heatmap[y:y + win_h, x:x + win_w], conf)
                     if conf >= conf_thresh:
@@ -245,7 +245,7 @@ def contour_proposals(image, win_h, win_w, feature_fn, head,
         label, conf = head.predict(feats)
         n_proposals += 1
 
-        if label == "object":
+        if label != "background":
             heatmap[py:py + win_h, px:px + win_w] = np.maximum(
                 heatmap[py:py + win_h, px:px + win_w], conf)
             if conf >= conf_thresh:

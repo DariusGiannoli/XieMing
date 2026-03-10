@@ -8,6 +8,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.detectors.rce.features import REGISTRY
 from src.models import BACKBONES, RecognitionHead
+from src.utils import build_rce_vector
+from src.localization import nms as _nms, _iou
 
 st.set_page_config(page_title="Real-Time Detection", layout="wide")
 st.title("🎯 Real-Time Detection")
@@ -30,6 +32,11 @@ active_mods  = st.session_state.get("active_modules", {k: True for k in REGISTRY
 
 x0, y0, x1, y1 = bbox
 win_h, win_w = y1 - y0, x1 - x0   # window = same size as crop
+
+if win_h <= 0 or win_w <= 0:
+    st.error("Invalid window size from crop bbox. "
+             "Go back to **Data Lab** and redefine the ROI.")
+    st.stop()
 
 # Color palette for multi-class drawing
 CLASS_COLORS = [(0,255,0),(0,0,255),(255,165,0),(255,0,255),(0,255,255),
@@ -120,38 +127,11 @@ def sliding_window_detect(
     return detections, heatmap, total_ms, n_total
 
 
-def _nms(dets, iou_thresh):
-    """Greedy NMS on list of (x1,y1,x2,y2,label,conf)."""
-    dets = sorted(dets, key=lambda d: d[5], reverse=True)
-    keep = []
-    while dets:
-        best = dets.pop(0)
-        keep.append(best)
-        dets = [d for d in dets if _iou(best, d) < iou_thresh]
-    return keep
-
-
-def _iou(a, b):
-    """IoU between two (x1,y1,x2,y2,…) tuples."""
-    xi1 = max(a[0], b[0]); yi1 = max(a[1], b[1])
-    xi2 = min(a[2], b[2]); yi2 = min(a[3], b[3])
-    inter = max(0, xi2-xi1) * max(0, yi2-yi1)
-    aa = (a[2]-a[0])*(a[3]-a[1])
-    ab = (b[2]-b[0])*(b[3]-b[1])
-    return inter / (aa + ab - inter + 1e-6)
-
-
 # ===================================================================
 #  RCE feature function
 # ===================================================================
 def rce_feature_fn(patch_bgr):
-    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
-    vec = []
-    for key, meta in REGISTRY.items():
-        if active_mods.get(key, False):
-            v, _ = meta["fn"](gray)
-            vec.extend(v)
-    return np.array(vec, dtype=np.float32)
+    return build_rce_vector(patch_bgr, active_mods)
 
 
 # ===================================================================

@@ -74,6 +74,15 @@ if focal <= 0:
             "Middlebury camera config.")
     st.stop()
 
+if focal > 10000:
+    st.error(f"❌ Focal length ({focal:.0f} px) is suspiciously large. "
+             "Check your camera config file.")
+    st.stop()
+
+if baseline <= 0 or baseline > 1000:
+    st.error(f"❌ Invalid baseline ({baseline:.1f}). Expected 1–1000 mm.")
+    st.stop()
+
 st.subheader("Camera Calibration")
 cc1, cc2, cc3, cc4 = st.columns(4)
 cc1.metric("Focal Length (px)", f"{focal:.1f}")

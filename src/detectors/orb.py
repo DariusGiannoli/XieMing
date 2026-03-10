@@ -69,9 +69,9 @@ class ORBDetector:
                 best_descriptors = des
         
         if best_descriptors is None:
-            print("❌ STILL FAILING: Images might be solid colors or too small (<31px).")
-            # Fallback: Just use SIFT if ORB fails (SIFT is more robust to blobs)
-            print("⚠️ Suggestion: Switch to SIFT if this persists.")
+            raise RuntimeError(
+                "ORB training failed: no features detected. "
+                "Images may be too smooth, too small, or solid colors.")
         else:
             self.reference_descriptors = best_descriptors
             if self.model_path:

@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.detectors.rce.features import REGISTRY
 from src.models import BACKBONES, RecognitionHead
+from src.utils import build_rce_vector
 
 st.set_page_config(page_title="Model Tuning", layout="wide")
 st.title("⚙️ Model Tuning: Train & Compare")
@@ -75,17 +76,7 @@ def build_training_set():
 
     images.extend(negatives)
     labels.extend(["background"] * len(negatives))
-    return images, labels
-
-
-def build_rce_vector(img_bgr):
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    vec = []
-    for key, meta in REGISTRY.items():
-        if active_modules.get(key, False):
-            v, _ = meta["fn"](gray)
-            vec.extend(v)
-    return np.array(vec, dtype=np.float32)
+    return images, labels, len(negatives) < n_neg_target // 2
 
 
 # ===================================================================
@@ -133,21 +124,30 @@ with col_rce:
         rce_max_iter = st.slider("Max Iterations", 100, 5000, 1000, step=100)
 
         if st.button("🚀 Train RCE Head"):
-            images, labels = build_training_set()
+            images, labels, neg_short = build_training_set()
+            if neg_short:
+                st.warning(f"⚠️ Only {sum(1 for l in labels if l == 'background')} "
+                           f"negatives collected (target was {sum(1 for l in labels if l != 'background') * 2}). "
+                           f"Training data may be imbalanced.")
             from sklearn.metrics import accuracy_score
+            from sklearn.model_selection import cross_val_score
 
             progress = st.progress(0, text="Extracting RCE features...")
             n = len(images)
             X = []
             for i, img in enumerate(images):
-                X.append(build_rce_vector(img))
+                X.append(build_rce_vector(img, active_modules))
                 progress.progress((i + 1) / n, text=f"Feature extraction: {i+1}/{n}")
 
             X = np.array(X)
             progress.progress(1.0, text="Fitting Logistic Regression...")
 
             t0 = time.perf_counter()
-            head = RecognitionHead(C=rce_C, max_iter=rce_max_iter).fit(X, labels)
+            try:
+                head = RecognitionHead(C=rce_C, max_iter=rce_max_iter).fit(X, labels)
+            except ValueError as e:
+                st.error(f"Training failed: {e}")
+                st.stop()
             train_time = time.perf_counter() - t0
             progress.progress(1.0, text="✅ Training complete!")
 
@@ -155,10 +155,25 @@ with col_rce:
             train_acc = accuracy_score(labels, preds)
 
             st.success(f"Trained in **{train_time:.2f}s**")
-            m1, m2, m3 = st.columns(3)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("Train Accuracy", f"{train_acc:.1%}")
-            m2.metric("Vector Size", f"{X.shape[1]} floats")
-            m3.metric("Samples", f"{len(images)}")
+            # Cross-validation (only if enough samples)
+            if len(images) >= 6:
+                n_splits = min(5, len(set(labels)))
+                if n_splits >= 2:
+                    cv_scores = cross_val_score(head.model, X, labels,
+                                               cv=min(3, len(images) // 2))
+                    m2.metric("CV Accuracy", f"{cv_scores.mean():.1%}",
+                              delta=f"±{cv_scores.std():.1%}")
+                else:
+                    m2.metric("CV Accuracy", "N/A")
+            else:
+                m2.metric("CV Accuracy", "N/A")
+            m3.metric("Vector Size", f"{X.shape[1]} floats")
+            m4.metric("Samples", f"{len(images)}")
+            if len(images) < 10:
+                st.warning("⚠️ Training set is small (<10 samples). "
+                           "Reported accuracy may not reflect real performance.")
             if is_multi:
                 st.caption(f"Classes: {', '.join(head.classes_)}")
 
@@ -231,7 +246,7 @@ with col_rce:
             st.subheader("Quick Predict (Crop)")
             head = st.session_state["rce_head"]
             t0 = time.perf_counter()
-            vec = build_rce_vector(crop_aug)
+            vec = build_rce_vector(crop_aug, active_modules)
             label, conf = head.predict(vec)
             dt = (time.perf_counter() - t0) * 1000
             st.write(f"**{label}** — {conf:.1%} confidence — {dt:.1f} ms")
@@ -254,10 +269,13 @@ with col_cnn:
                               key="cnn_iter")
 
     if st.button(f"🚀 Train {selected} Head"):
-        images, labels = build_training_set()
+        images, labels, neg_short = build_training_set()
+        if neg_short:
+            st.warning(f"⚠️ Negative sample shortfall — training may be imbalanced.")
         backbone = meta["loader"]()
 
         from sklearn.metrics import accuracy_score
+        from sklearn.model_selection import cross_val_score
 
         progress = st.progress(0, text=f"Extracting {selected} features...")
         n = len(images)
@@ -270,7 +288,11 @@ with col_cnn:
         progress.progress(1.0, text="Fitting Logistic Regression...")
 
         t0 = time.perf_counter()
-        head = RecognitionHead(C=cnn_C, max_iter=cnn_max_iter).fit(X, labels)
+        try:
+            head = RecognitionHead(C=cnn_C, max_iter=cnn_max_iter).fit(X, labels)
+        except ValueError as e:
+            st.error(f"Training failed: {e}")
+            st.stop()
         train_time = time.perf_counter() - t0
         progress.progress(1.0, text="✅ Training complete!")
 
@@ -278,10 +300,21 @@ with col_cnn:
         train_acc = accuracy_score(labels, preds)
 
         st.success(f"Trained in **{train_time:.2f}s**")
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Train Accuracy", f"{train_acc:.1%}")
-        m2.metric("Vector Size", f"{X.shape[1]}D")
-        m3.metric("Samples", f"{len(images)}")
+        if len(images) >= 6:
+            n_splits = min(5, len(set(labels)))
+            if n_splits >= 2:
+                cv_scores = cross_val_score(head.model, X, labels,
+                                           cv=min(3, len(images) // 2))
+                m2.metric("CV Accuracy", f"{cv_scores.mean():.1%}",
+                          delta=f"±{cv_scores.std():.1%}")
+            else:
+                m2.metric("CV Accuracy", "N/A")
+        else:
+            m2.metric("CV Accuracy", "N/A")
+        m3.metric("Vector Size", f"{X.shape[1]}D")
+        m4.metric("Samples", f"{len(images)}")
         if is_multi:
             st.caption(f"Classes: {', '.join(head.classes_)}")
 

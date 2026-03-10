@@ -72,7 +72,9 @@ def _iou(a, b):
 def match_detections(dets, gt_list, iou_thr):
     """
     Match detections to GT boxes.
-    Returns list of (det, matched_gt_label_or_None, iou) sorted by confidence.
+    Returns (results, n_missed, matched_gt_indices).
+    results = list of (det, matched_gt_label_or_None, iou) sorted by confidence.
+    matched_gt_indices = set of GT indices that were matched.
     """
     dets_sorted = sorted(dets, key=lambda d: d[5], reverse=True)
     matched_gt = set()
@@ -100,7 +102,7 @@ def match_detections(dets, gt_list, iou_thr):
         else:
             results.append((det, None, best_iou))
 
-    return results, len(gt_list) - len(matched_gt)
+    return results, len(gt_list) - len(matched_gt), matched_gt
 
 
 def compute_pr_curve(dets, gt_list, iou_thr, steps=50):
@@ -122,7 +124,7 @@ def compute_pr_curve(dets, gt_list, iou_thr, steps=50):
             f1s.append(0.0)
             continue
 
-        matched, n_missed = match_detections(filtered, gt_list, iou_thr)
+        matched, n_missed, _ = match_detections(filtered, gt_list, iou_thr)
         tp = sum(1 for _, gt_lbl, _ in matched if gt_lbl is not None)
         fp = sum(1 for _, gt_lbl, _ in matched if gt_lbl is None)
         fn = n_missed
@@ -149,7 +151,7 @@ def build_confusion_matrix(dets, gt_list, iou_thr):
     matrix = np.zeros((n, n), dtype=int)
     label_to_idx = {lbl: i for i, lbl in enumerate(all_labels)}
 
-    matched, n_missed = match_detections(dets, gt_list, iou_thr)
+    matched, n_missed, matched_gt_indices = match_detections(dets, gt_list, iou_thr)
 
     for det, gt_lbl, _ in matched:
         pred_lbl = det[4]
@@ -164,13 +166,6 @@ def build_confusion_matrix(dets, gt_list, iou_thr):
             matrix[pi][label_to_idx["background"]] += 1
 
     # FN: unmatched GT
-    matched_gt_indices = set()
-    for det, gt_lbl, _ in matched:
-        if gt_lbl is not None:
-            for gi, (_, gl) in enumerate(gt_list):
-                if gl == gt_lbl and gi not in matched_gt_indices:
-                    matched_gt_indices.add(gi)
-                    break
     for gi, (_, gt_lbl) in enumerate(gt_list):
         if gi not in matched_gt_indices:
             matrix[label_to_idx["background"]][label_to_idx[gt_lbl]] += 1
@@ -216,7 +211,7 @@ for col, (name, dets) in zip(cm_cols, methods.items()):
         st.plotly_chart(fig_cm, use_container_width=True)
 
         # Summary metrics at this default threshold
-        matched, n_missed = match_detections(dets, gt_boxes, iou_thresh)
+        matched, n_missed, _ = match_detections(dets, gt_boxes, iou_thresh)
         tp = sum(1 for _, g, _ in matched if g is not None)
         fp = sum(1 for _, g, _ in matched if g is None)
         fn = n_missed

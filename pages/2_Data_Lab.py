@@ -80,6 +80,8 @@ def augment(img: np.ndarray, brightness: float, contrast: float,
 
 
 # --- Session State Initialization ---
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
 if "pipeline_data" not in st.session_state:
     st.session_state["pipeline_data"] = {}
 
@@ -92,9 +94,13 @@ col1, col2 = st.columns(2)
 with col1:
     up_l = st.file_uploader("Left Image (Reference)", type=["png", "jpg", "jpeg"])
     if up_l:
-        img_l_preview = cv2.imdecode(np.frombuffer(up_l.read(), np.uint8), cv2.IMREAD_COLOR)
-        up_l.seek(0)
-        st.image(cv2.cvtColor(img_l_preview, cv2.COLOR_BGR2RGB), caption="Left Image Preview", use_container_width=True)
+        if up_l.size > MAX_UPLOAD_BYTES:
+            st.error(f"❌ Left image too large ({up_l.size / 1e6:.1f} MB). Max 50 MB.")
+            up_l = None
+        else:
+            img_l_preview = cv2.imdecode(np.frombuffer(up_l.read(), np.uint8), cv2.IMREAD_COLOR)
+            up_l.seek(0)
+            st.image(cv2.cvtColor(img_l_preview, cv2.COLOR_BGR2RGB), caption="Left Image Preview", use_container_width=True)
 
     up_conf = st.file_uploader("Camera Config (.txt or .conf)", type=["txt", "conf"])
 
@@ -110,9 +116,13 @@ with col1:
 with col2:
     up_r = st.file_uploader("Right Image (Stereo Match)", type=["png", "jpg", "jpeg"])
     if up_r:
-        img_r_preview = cv2.imdecode(np.frombuffer(up_r.read(), np.uint8), cv2.IMREAD_COLOR)
-        up_r.seek(0)
-        st.image(cv2.cvtColor(img_r_preview, cv2.COLOR_BGR2RGB), caption="Right Image Preview", use_container_width=True)
+        if up_r.size > MAX_UPLOAD_BYTES:
+            st.error(f"❌ Right image too large ({up_r.size / 1e6:.1f} MB). Max 50 MB.")
+            up_r = None
+        else:
+            img_r_preview = cv2.imdecode(np.frombuffer(up_r.read(), np.uint8), cv2.IMREAD_COLOR)
+            up_r.seek(0)
+            st.image(cv2.cvtColor(img_r_preview, cv2.COLOR_BGR2RGB), caption="Right Image Preview", use_container_width=True)
 
     up_gt_r = st.file_uploader("Right Ground Truth Depth (.pfm)", type=["pfm"])
     if up_gt_r:
@@ -168,6 +178,8 @@ if up_l and up_r and up_conf and up_gt_l and up_gt_r:
                                       "x1": min(W, 100), "y1": min(H, 100)}]
 
     def _add_roi():
+        if len(st.session_state["rois"]) >= 20:
+            return
         st.session_state["rois"].append(
             {"label": f"object_{len(st.session_state['rois'])+1}",
              "x0": 0, "y0": 0,
@@ -205,7 +217,8 @@ if up_l and up_r and up_conf and up_gt_l and up_gt_r:
                                               min(H, int(roi["y1"])),
                                               step=1, key=f"roi_y1_{i}"))
 
-    st.button("➕ Add Another ROI", on_click=_add_roi)
+    st.button("➕ Add Another ROI", on_click=_add_roi,
+              disabled=len(st.session_state["rois"]) >= 20)
 
     # Draw all ROIs on the image
     overlay = img_l.copy()
