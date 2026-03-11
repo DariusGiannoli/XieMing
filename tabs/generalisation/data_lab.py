@@ -135,6 +135,7 @@ def render():
     st.write("Define bounding boxes on the **TRAIN image**.")
 
     H, W = img_train.shape[:2]
+    st.caption(f"📏 Image size: **{W} × {H}** px  (X: 0 → {W-1},  Y: 0 → {H-1})")
 
     if "gen_rois" not in st.session_state:
         st.session_state["gen_rois"] = [
@@ -172,18 +173,40 @@ def render():
                                               step=1, key=f"gen_roi_x0_{i}"))
             roi["y0"] = int(cr2.number_input("Y start", 0, H-2, int(roi["y0"]),
                                               step=1, key=f"gen_roi_y0_{i}"))
-            roi["x1"] = max(roi["x0"] + 1, int(cr3.number_input("X end", 1, W,
+            roi["x1"] = int(cr3.number_input("X end", 0, W,
                                               min(W, int(roi["x1"])),
-                                              step=1, key=f"gen_roi_x1_{i}")))
-            roi["y1"] = max(roi["y0"] + 1, int(cr4.number_input("Y end", 1, H,
+                                              step=1, key=f"gen_roi_x1_{i}"))
+            roi["y1"] = int(cr4.number_input("Y end", 0, H,
                                               min(H, int(roi["y1"])),
-                                              step=1, key=f"gen_roi_y1_{i}")))
+                                              step=1, key=f"gen_roi_y1_{i}"))
+            if roi["x1"] <= roi["x0"] or roi["y1"] <= roi["y0"]:
+                st.error(f"ROI {i+1}: end must be greater than start "
+                         f"(X: {roi['x0']}→{roi['x1']}, Y: {roi['y0']}→{roi['y1']}). "
+                         f"Adjust the values above.")
 
     st.button("➕ Add Another ROI", on_click=_add_roi,
               disabled=len(st.session_state["gen_rois"]) >= 20,
               key="gen_add_roi")
 
+    # Validate all ROIs before drawing
+    roi_valid = all(r["x1"] > r["x0"] and r["y1"] > r["y0"]
+                    for r in st.session_state["gen_rois"])
+
+    if not roi_valid:
+        st.warning("⚠️ Fix the invalid ROI coordinates above before proceeding.")
+        st.stop()
+
     overlay = img_train.copy()
+    # Draw pixel ruler (tick marks every 100 px)
+    for px in range(0, W, 100):
+        cv2.line(overlay, (px, 0), (px, 12), (200, 200, 200), 1)
+        cv2.putText(overlay, str(px), (px + 2, 11),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200, 200, 200), 1)
+    for py in range(0, H, 100):
+        cv2.line(overlay, (0, py), (12, py), (200, 200, 200), 1)
+        cv2.putText(overlay, str(py), (1, py + 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200, 200, 200), 1)
+
     crops = []
     for i, roi in enumerate(st.session_state["gen_rois"]):
         color = ROI_COLORS[i % len(ROI_COLORS)]
