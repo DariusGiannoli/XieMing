@@ -8,6 +8,12 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from src.depth_nn import load_depth_anything, predict_depth, align_to_gt
+from src.epipolar import (
+    fundamental_from_calibration,
+    fundamental_from_scalars,
+    sparse_epipolar_depth,
+    draw_epipolar_canvas,
+)
 
 
 def _parse_config(text: str) -> dict:
@@ -399,3 +405,132 @@ def render():
             nc1.metric("NN Depth", best["NN Depth"])
             nc2.metric("Ground Truth", best["GT Depth"])
             nc3.metric("NN Error", best["NN Error"])
+
+    # ==================================================================
+    #  Step 6 — Epipolar Geometry · Sparse Stereo Matching
+    # ==================================================================
+    st.divider()
+    st.subheader("Step 6: Epipolar Geometry — Sparse Stereo Matching")
+    st.markdown(
+        "Instead of computing a **dense** disparity map (SGBM), this step "
+        "demonstrates the **classical epipolar-geometry** pipeline:\n\n"
+        "1. Extract **ORB key-points** inside each detection bounding-box (left image).\n"
+        "2. Compute the **fundamental matrix F** from the camera calibration.\n"
+        "3. Project the **epipolar line** for each key-point onto the right image.\n"
+        "4. **Template-match** a patch along that line to find the correspondence.\n"
+        "5. Compute disparity  $d = x_L - x_R$  →  depth  "
+        "$Z = \\frac{f \\cdot B}{d + d_{\\text{offs}}}$"
+    )
+
+    if not all_dets:
+        st.warning("No detections available — run detection first.")
+    else:
+        # --- Compute F ---------------------------------------------------
+        cam1 = calib_dict.get("cam1")
+        if (isinstance(cam0, np.ndarray) and cam0.shape == (3, 3) and
+                isinstance(cam1, np.ndarray) and cam1.shape == (3, 3)):
+            F = fundamental_from_calibration(cam0, cam1, baseline)
+        else:
+            cx0 = float(cam0[0, 2]) if isinstance(cam0, np.ndarray) else focal * 0.5
+            cy  = float(cam0[1, 2]) if isinstance(cam0, np.ndarray) else focal * 0.5
+            cx1 = cx0 + doffs
+            F = fundamental_from_scalars(focal, cx0, cy, cx1)
+
+        with st.expander("Fundamental Matrix  **F**", expanded=False):
+            st.markdown(
+                "$$F = K_R^{-T} \\; [\\mathbf{t}]_{\\times} \\; K_L^{-1}$$"
+            )
+            st.write("For rectified images the epipolar lines are horizontal "
+                     "(row 0 of F ≈ 0).")
+            st.code(np.array2string(F, precision=6, suppress_small=True), language=None)
+
+        # --- Controls ----------------------------------------------------
+        ep1, ep2, ep3 = st.columns(3)
+        n_kp = ep1.slider("Key-points per detection", 3, 30, 10,
+                           key="stereo_epi_nkp")
+        patch_sz = ep2.slider("Patch half-size (px)", 10, 60, 25,
+                               key="stereo_epi_patch")
+        m_thresh = ep3.slider("Match confidence threshold", 0.1, 0.9, 0.3, 0.05,
+                               key="stereo_epi_thr")
+
+        run_epi = st.button("▶  Run Epipolar Matching", key="stereo_epi_run")
+
+        if run_epi:
+            with st.spinner("Matching key-points along epipolar lines …"):
+                epi_results, epi_ms = sparse_epipolar_depth(
+                    img_l, img_r, all_dets, F,
+                    focal, baseline, doffs, ndisp=ndisp,
+                    n_keypoints=n_kp, patch_half=patch_sz,
+                    match_thresh=m_thresh,
+                )
+            st.success(f"Epipolar matching finished in **{epi_ms:.0f} ms**")
+
+            # --- Per-detection results -----------------------------------
+            for res in epi_results:
+                st.markdown(f"---\n**{res['source']} — {res['label']}**  "
+                            f"(box {res['box']})")
+
+                # Side-by-side visualisation
+                canvas = draw_epipolar_canvas(img_l, img_r, res)
+                st.image(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB),
+                         caption="Left: key-points  |  Right: epipolar lines + matches",
+                         use_container_width=True)
+
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("Key-points", res["n_keypoints"])
+                mc2.metric("Matched", res["n_matched"])
+                mc3.metric("Epipolar Depth",
+                           f"{res['median_depth_mm']:.0f} mm"
+                           if res["median_depth_mm"] > 0 else "N/A")
+
+                # Per-keypoint table
+                if res["matches"]:
+                    match_rows = []
+                    for m in res["matches"]:
+                        match_rows.append({
+                            "Left (x, y)": f"({m['left_pt'][0]}, {m['left_pt'][1]})",
+                            "Right (x, y)": f"({m['right_pt'][0]}, {m['right_pt'][1]})",
+                            "Disparity (px)": f"{m['disparity']:.1f}",
+                            "Depth (mm)": f"{m['depth_mm']:.0f}",
+                            "Match Conf": f"{m['match_conf']:.2f}",
+                        })
+                    st.dataframe(pd.DataFrame(match_rows),
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.info("No confident matches found — try lowering the "
+                            "threshold or increasing the patch size.")
+
+            # --- Comparison table: SGBM vs Epipolar vs GT ----------------
+            if epi_results:
+                st.divider()
+                st.markdown("##### Depth Comparison — Dense SGBM vs Sparse Epipolar")
+                comp_rows = []
+                for res in epi_results:
+                    dx1, dy1, dx2, dy2 = res["box"]
+                    H_d, W_d = depth_map.shape[:2]
+                    rx0 = max(0, min(dx1, W_d - 1))
+                    ry0 = max(0, min(dy1, H_d - 1))
+                    rx1 = max(0, min(dx2, W_d))
+                    ry1 = max(0, min(dy2, H_d))
+                    roi_d = depth_map[ry0:ry1, rx0:rx1]
+                    sgbm_d = float(np.median(roi_d[roi_d > 0])) if (roi_d > 0).any() else 0
+
+                    gt_d = 0.0
+                    if gt_left is not None:
+                        gt_roi = gt_left[ry0:ry1, rx0:rx1]
+                        gt_vals = gt_roi[np.isfinite(gt_roi) & (gt_roi > 0)]
+                        if len(gt_vals) > 0:
+                            gt_med_disp = float(np.median(gt_vals))
+                            gt_d = (focal * baseline) / (gt_med_disp + doffs) if (gt_med_disp + doffs) > 0 else 0
+
+                    epi_d = res["median_depth_mm"]
+                    comp_rows.append({
+                        "Detection": f"{res['source']} — {res['label']}",
+                        "SGBM Depth": f"{sgbm_d:.0f} mm" if sgbm_d > 0 else "N/A",
+                        "Epipolar Depth": f"{epi_d:.0f} mm" if epi_d > 0 else "N/A",
+                        "GT Depth": f"{gt_d:.0f} mm" if gt_d > 0 else "N/A",
+                        "SGBM Err": f"{abs(sgbm_d - gt_d):.0f} mm" if sgbm_d > 0 and gt_d > 0 else "—",
+                        "Epi Err": f"{abs(epi_d - gt_d):.0f} mm" if epi_d > 0 and gt_d > 0 else "—",
+                    })
+                st.dataframe(pd.DataFrame(comp_rows),
+                             use_container_width=True, hide_index=True)
