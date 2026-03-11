@@ -214,7 +214,7 @@ class RecognitionHead:
     """
     A tiny trainable layer on top of a frozen backbone.
     Wraps sklearn ``LogisticRegression`` for binary classification.
-    Stored in ``st.session_state`` — never saved to disk.
+    Stored in ``st.session_state`` and optionally persisted to disk.
     """
 
     def __init__(self, C: float = 1.0, max_iter: int = 1000):
@@ -239,6 +239,23 @@ class RecognitionHead:
     @property
     def classes_(self):
         return self.model.classes_
+
+    def save(self, path: str):
+        """Persist the trained head to *path* via joblib."""
+        import joblib
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({"model": self.model, "is_trained": self.is_trained}, path)
+
+    @classmethod
+    def load(cls, path: str) -> "RecognitionHead":
+        """Load a previously saved head from *path*."""
+        import joblib
+        data = joblib.load(path)
+        head = cls.__new__(cls)
+        head.model = data["model"]
+        head.is_trained = data["is_trained"]
+        return head
 
 
 # ===================================================================

@@ -320,8 +320,8 @@ def render():
                               caption="Input Crop", use_container_width=True)
                     gc2.image(cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB),
                               caption="Activation Overlay", use_container_width=True)
-            except Exception:
-                pass
+            except Exception as e:
+                st.warning(f"Activation overlay failed: {e}")
 
             pipe[f"cnn_head_{selected}"] = head
             pipe[f"cnn_acc_{selected}"] = train_acc

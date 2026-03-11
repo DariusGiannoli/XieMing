@@ -261,9 +261,9 @@ def render():
             "crop_bbox":    (x0, y0, x1, y1),
             "rois":         rois_data,
             "source":       "middlebury" if source == "📦 Middlebury Multi-View" else "custom",
-            "scene_group":  scene_group if "scene_group" in dir() else "",
-            "train_scene":  train_scene if "train_scene" in dir() else "",
-            "test_scene":   test_scene if "test_scene" in dir() else "",
+            "scene_group":  scene_group,
+            "train_scene":  train_scene,
+            "test_scene":   test_scene,
         }
         st.success(f"✅ Data locked with **{len(rois_data)} ROI(s)**! "
                    f"Proceed to Feature Lab.")

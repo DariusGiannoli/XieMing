@@ -295,7 +295,7 @@ def render():
             "train_image":  img_l,
             "test_image":   img_r,
             "calib":        calib if calib else None,
-            "disparity_gt": gt_disp if "gt_disp" in dir() else None,
+            "disparity_gt": gt_disp,
             "roi":          {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0,
                             "label": st.session_state["stereo_rois"][0]["label"]},
             "crop":         crop_bgr,
@@ -303,8 +303,8 @@ def render():
             "crop_bbox":    (x0, y0, x1, y1),
             "rois":         rois_data,
             "source":       "middlebury" if source == "📦 Middlebury Dataset" else "custom",
-            "scene_name":   scene_name if "scene_name" in dir() else "",
-            "conf_raw":     conf_raw if "conf_raw" in dir() else "",
+            "scene_name":   scene_name,
+            "conf_raw":     conf_raw,
         }
         st.success(f"✅ Data locked with **{len(rois_data)} ROI(s)**! "
                    f"Proceed to Feature Lab.")

@@ -175,11 +175,19 @@ def render():
         fig_f1.add_trace(go.Scatter(
             x=thrs, y=f1s, mode="lines",
             name=name, line=dict(color=clr, width=2)))
-        ap = float(np.trapz(precs, recs)) if recs and precs else 0.0
+        # 11-point interpolated AP (VOC standard)
+        if recs and precs:
+            ap = 0.0
+            for t in np.arange(0.0, 1.1, 0.1):
+                p_at_r = [p for p, r in zip(precs, recs) if r >= t]
+                ap += max(p_at_r) if p_at_r else 0.0
+            ap /= 11.0
+        else:
+            ap = 0.0
         best_f1_idx = int(np.argmax(f1s)) if f1s else 0
         summary_rows.append({
             "Method": name,
-            "AP": f"{abs(ap):.3f}",
+            "AP": f"{ap:.3f}",
             "Best F1": f"{f1s[best_f1_idx]:.3f}" if f1s else "N/A",
             "@ Threshold": f"{thrs[best_f1_idx]:.2f}" if thrs else "N/A",
             "Detections": len(dets),

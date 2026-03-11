@@ -44,14 +44,25 @@ def predict_depth(img_bgr: np.ndarray) -> tuple[np.ndarray, float]:
         Raw relative inverse-depth output (not metric).
     elapsed_ms : float
         Wall-clock inference time in milliseconds.
+
+    Raises
+    ------
+    RuntimeError
+        If depth model fails to load or inference crashes.
     """
-    pipe = load_depth_anything()
+    try:
+        pipe = load_depth_anything()
+    except Exception as e:
+        raise RuntimeError(f"Failed to load Depth Anything V2: {e}") from e
     from PIL import Image
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(img_rgb)
 
     t0 = time.perf_counter()
-    result = pipe(pil_img)
+    try:
+        result = pipe(pil_img)
+    except Exception as e:
+        raise RuntimeError(f"Depth inference failed: {e}") from e
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     depth_pil = result["depth"]
