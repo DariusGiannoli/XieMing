@@ -115,8 +115,8 @@ def render_home():
     # -------------------------------------------------------------------
     st.header("🧠 Models Used")
 
-    tab_rce, tab_resnet, tab_mobilenet, tab_mobilevit = st.tabs(
-        ["RCE Engine", "ResNet-18", "MobileNetV3-Small", "MobileViT-XXS"])
+    tab_rce, tab_resnet, tab_mobilenet, tab_mobilevit, tab_yolo = st.tabs(
+        ["RCE Engine", "ResNet-18", "MobileNetV3-Small", "MobileViT-XXS", "YOLOv8n"])
 
     with tab_rce:
         st.markdown("### 🧬 RCE — Relative Contextual Encoding")
@@ -169,6 +169,19 @@ Only the lightweight head adapts to your specific object.
 **Head:** LogisticRegression trained on your session data
 
 **In this app:** Hybrid CNN + Vision Transformer. Only ~1.3 M parameters.
+        """)
+
+    with tab_yolo:
+        st.markdown("### 🎯 YOLOv8-Nano (Backbone)")
+        st.markdown("""
+**Source:** Ultralytics YOLOv8n (`models/yolov8n.pt`)
+**Pre-training:** COCO (80 classes)
+**Backbone output:** 256-dimensional embedding (after SPPF + GAP)
+**Head:** LogisticRegression trained on your session data
+
+**In this app:** Only the backbone (layers 0–9) is used as a frozen
+feature extractor — the detection head is discarded. Smallest backbone
+in the benchmark at 256D.
         """)
 
     st.divider()

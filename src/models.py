@@ -176,6 +176,38 @@ class MobileViTBackbone(_FrozenBackbone):
 
 
 # ===================================================================
+#  YOLOv8n Backbone (feature extractor only — no detection head)
+# ===================================================================
+class YOLOv8Backbone(_FrozenBackbone):
+    """YOLOv8-Nano backbone (layers 0–9), frozen, used as feature extractor.
+    Produces a 256-D embedding via global average pooling after SPPF."""
+
+    DIM = 256
+
+    def __init__(self):
+        from ultralytics import YOLO as _YOLO
+        full = _YOLO("models/yolov8n.pt")
+        # Layers 0-9 = Conv/C2f backbone + SPPF (before the detection neck)
+        self.backbone = nn.Sequential(*list(full.model.model[:10]))
+        self._freeze(self.backbone)
+        self.transform = _IMAGENET_TRANSFORM
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+    def get_features(self, img_bgr):
+        t = self.transform(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        with torch.no_grad():
+            feat = self.backbone(t.unsqueeze(0).to(DEVICE))
+            return self.pool(feat).cpu().numpy().flatten()
+
+    def get_activation_maps(self, img_bgr, n_maps=6):
+        t = self.transform(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        with torch.no_grad():
+            feat = self.backbone(t.unsqueeze(0).to(DEVICE))
+        acts = feat[0].cpu().numpy()
+        return [self._norm(acts[i]) for i in range(min(n_maps, acts.shape[0]))]
+
+
+# ===================================================================
 #  Lightweight Head  (lives in session state, never on disk)
 # ===================================================================
 class RecognitionHead:
@@ -227,6 +259,11 @@ def get_mobilevit() -> MobileViTBackbone:
     """Download & freeze MobileViT-XXS.  Stays in RAM."""
     return MobileViTBackbone()
 
+@st.cache_resource
+def get_yolov8() -> YOLOv8Backbone:
+    """Load & freeze YOLOv8n backbone.  Stays in RAM."""
+    return YOLOv8Backbone()
+
 
 # ===================================================================
 #  BACKBONES  —  The Registry Dict
@@ -246,5 +283,10 @@ BACKBONES = {
         "loader":     get_mobilevit,
         "dim":        MobileViTBackbone.DIM,
         "hook_layer": "stages[-1] (last transformer stage)",
+    },
+    "YOLOv8n": {
+        "loader":     get_yolov8,
+        "dim":        YOLOv8Backbone.DIM,
+        "hook_layer": "SPPF (layer 9, end of backbone)",
     },
 }
