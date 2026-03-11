@@ -191,7 +191,7 @@ in the benchmark at 256D.
     # -------------------------------------------------------------------
     st.header("📐 Stereo Depth Estimation")
 
-    tab_sgbm, tab_dav2 = st.tabs(["StereoSGBM (Classical)", "Depth Anything V2 (NN)"])
+    tab_sgbm, tab_dav2, tab_epi = st.tabs(["StereoSGBM (Classical)", "Depth Anything V2 (NN)", "Epipolar Geometry (Sparse)"])
 
     with tab_sgbm:
         st.markdown("### 📏 StereoSGBM — Semi-Global Block Matching")
@@ -250,6 +250,51 @@ alignment** is applied before computing error metrics:
 
 The Stereo Stage shows both side-by-side with MAE, RMSE,
 and Bad-2.0 pixel error against the Middlebury ground truth.
+            """)
+
+    with tab_epi:
+        st.markdown("### 📐 Epipolar Geometry — Sparse Stereo Matching")
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+            st.markdown("""
+**What it is:** The classical, principled way to find correspondences between a stereo pair.
+
+Unlike StereoSGBM — which searches every pixel on the same row — the epipolar
+approach works **point by point** on detected objects:
+
+1. **Detect key-points** (ORB) inside the bounding box in the **left** image.
+2. **Compute the fundamental matrix F** from the camera calibration:
+            """)
+            st.latex(r"F = K_R^{-T} \; [t]_\times \; K_L^{-1}")
+            st.markdown("""
+3. **Project each key-point** through F — this produces an **epipolar line** in the right image.
+4. **Template-match** a patch around the key-point *along* that line (NCC).
+5. The x-offset between the two matches gives the **disparity** $d = x_L - x_R$.
+6. Recover metric depth:
+            """)
+            st.latex(r"Z = \frac{f \times B}{d + d_{\text{offs}}}")
+        with col_e2:
+            st.markdown("""
+**Why epipolar?**
+
+For a rectified stereo pair the epipolar lines are horizontal, so the search
+collapses to 1D — but you only pay the cost for key-points you actually care about,
+not the whole image.
+
+| | StereoSGBM | Epipolar (sparse) |
+|---|---|---|
+| **Scope** | All pixels | Key-points inside detections |
+| **Search space** | Full row | Along epipolar line (1D) |
+| **F matrix used** | ❌ Implicit | ✅ Explicit |
+| **Output** | Dense depth map | Depth per key-point |
+| **Best for** | Full-scene depth | Object-level depth queries |
+
+**In this app (Step 6 — Stereo Geometry tab):**
+- ORB key-points are extracted from each detection bounding-box.
+- F is built from the `cam0` / `cam1` matrices in the Middlebury `calib.txt`.
+- For rectified Middlebury pairs the epipolar lines are verified horizontal
+  (row 0 of F ≈ 0).
+- Results are shown alongside the dense SGBM depth in a comparison table.
             """)
 
     st.divider()
