@@ -1,0 +1,31 @@
+stage: stage2
+dataset: middlebury
+episodes: manifests/stage2_episodes_refined.json
+model_ids:
+  - rce_rgb
+  - lr_resnet18
+  - lr_mobilenetv3
+  - lr_mobilevit_xxs
+  - rce_resnet18
+  - rce_mobilenetv3
+  - rce_mobilevit_xxs
+training:
+  rce_r_max: 80.0
+  rce_rgb_object_pixels: 1500
+  rce_rgb_background_pixels: 1500
+  stage2_test_negative_patches: 12
+  n_positive_patches: 8
+  n_negative_patches: 24
+  lr_c: 1.0
+  lr_max_iter: 1000
+inference:
+  stride: 75
+  conf_thresh: 0.25
+  classification_threshold: 0.2
+  nms_iou: 0.3
+  eval_iou: 0.5
+seeds:
+  - 7
+  - 13
+  - 29
+output_dir: rce_benchmark/outputs/stage2_full

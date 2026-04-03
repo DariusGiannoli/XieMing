@@ -1,0 +1,21 @@
+stage: stage2
+dataset: middlebury
+episodes: manifests/stage2_episodes_refined.json
+model_ids:
+  - rce_rgb
+training:
+  rce_r_max: 80.0
+  rce_rgb_object_pixels: 800
+  rce_rgb_background_pixels: 800
+  stage2_test_negative_patches: 8
+  n_positive_patches: 4
+  n_negative_patches: 8
+inference:
+  stride: 150
+  conf_thresh: 0.25
+  classification_threshold: 0.2
+  nms_iou: 0.3
+  eval_iou: 0.5
+seeds:
+  - 11
+output_dir: rce_benchmark/outputs/stage2_smoke

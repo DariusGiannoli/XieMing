@@ -1,0 +1,17 @@
+stage: stage1
+dataset: middlebury
+episodes: manifests/stage1_episodes_refined.json
+model_ids:
+  - rce_rgb
+training:
+  rce_r_max: 80.0
+  rce_rgb_object_pixels: 800
+  rce_rgb_background_pixels: 800
+inference:
+  stride: 150
+  conf_thresh: 0.25
+  nms_iou: 0.3
+  eval_iou: 0.5
+seeds:
+  - 7
+output_dir: rce_benchmark/outputs/stage1_smoke

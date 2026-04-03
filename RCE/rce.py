@@ -3,8 +3,10 @@ Standard Restricted Coulomb Energy (RCE) classifier.
 
 Prototype layer with spherical influence fields (Euclidean distance).
 Training: prototype commitment + threshold modification.
-Vectorised with numpy for practical speed on pixel-level data.
+Vectorized with numpy for practical speed on pixel-level data.
 """
+
+from __future__ import annotations
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -18,12 +20,14 @@ class RCE:
       - Training: commit new prototypes; shrink wrong-class radii.
     """
 
-    def __init__(self, R_max=100.0, default_label="background"):
+    def __init__(self, R_max: float = 100.0, default_label: str = "background"):
         self.R_max = float(R_max)
         self.default_label = default_label
-        self.centers_ = None   # (P, F) float64
-        self.radii_ = None     # (P,)   float64
-        self.labels_ = None    # (P,)   object array
+        self.centers_ = None
+        self.radii_ = None
+        self.labels_ = None
+        self.support_counts_ = None
+        self.feature_dim_ = None
 
     @property
     def prototypes_(self):
@@ -38,30 +42,28 @@ class RCE:
         if X.ndim == 1:
             X = X.reshape(1, -1)
         n, f = X.shape
+        self.feature_dim_ = int(f)
 
-        # Precompute per-class indices and nearest-opposite distances
         unique_labels = np.unique(y)
         class_indices = {lbl: np.where(y == lbl)[0] for lbl in unique_labels}
 
-        # For each sample, distance to nearest opposite-class sample (precomputed)
         nearest_opp = np.full(n, self.R_max, dtype=np.float64)
         for lbl in unique_labels:
             own = class_indices[lbl]
             opp_idx = np.where(y != lbl)[0]
             if len(opp_idx) == 0:
                 continue
-            # Chunked cdist to avoid huge memory
             chunk = 5000
             for start in range(0, len(own), chunk):
-                batch = own[start:start + chunk]
+                batch = own[start : start + chunk]
                 D = cdist(X[batch], X[opp_idx], metric="euclidean")
                 nearest_opp[batch] = np.minimum(nearest_opp[batch], D.min(axis=1))
 
-        # Preallocate prototype storage (grows by doubling)
         cap = min(n, 4096)
         P_centers = np.empty((cap, f), dtype=np.float64)
         P_radii = np.empty(cap, dtype=np.float64)
         P_labels = np.empty(cap, dtype=y.dtype)
+        P_support = np.zeros(cap, dtype=np.int64)
         n_proto = 0
 
         for i in range(n):
@@ -69,13 +71,14 @@ class RCE:
             label = y[i]
 
             if n_proto > 0:
-                dists = np.linalg.norm(
-                    P_centers[:n_proto] - x, axis=1
-                )  # (n_proto,)
+                dists = np.linalg.norm(P_centers[:n_proto] - x, axis=1)
                 fired = dists < P_radii[:n_proto]
                 L = P_labels[:n_proto]
 
-                if np.any((L == label) & fired):
+                correct_firing = np.where((L == label) & fired)[0]
+                if len(correct_firing) > 0:
+                    best_idx = correct_firing[np.argmin(dists[correct_firing])]
+                    P_support[best_idx] += 1
                     continue
 
                 wrong_mask = (L != label) & fired
@@ -83,7 +86,6 @@ class RCE:
                     wrong_idx = np.where(wrong_mask)[0]
                     P_radii[wrong_idx] = dists[wrong_idx]
 
-            # Commit new prototype
             r0 = min(float(nearest_opp[i]), self.R_max)
             r0 = max(r0, 1e-6)
             if n_proto >= cap:
@@ -91,75 +93,136 @@ class RCE:
                 P_centers = np.resize(P_centers, (cap, f))
                 P_radii = np.resize(P_radii, cap)
                 P_labels = np.resize(P_labels, cap)
+                P_support = np.resize(P_support, cap)
             P_centers[n_proto] = x
             P_radii[n_proto] = r0
             P_labels[n_proto] = label
+            P_support[n_proto] = 1
             n_proto += 1
 
         self.centers_ = P_centers[:n_proto].copy()
         self.radii_ = P_radii[:n_proto].copy()
         self.labels_ = P_labels[:n_proto].copy()
+        self.support_counts_ = P_support[:n_proto].copy()
         return self
 
-    def predict(self, X):
-        """
-        Vectorised prediction. For each input, find activated prototypes
-        (d < radius); pick the one with smallest distance and return its label.
-        """
+    def _distances(self, X):
         X = np.asarray(X, dtype=np.float64)
         if X.ndim == 1:
             X = X.reshape(1, -1)
+        if self.centers_ is None or len(self.centers_) == 0:
+            return X, np.empty((len(X), 0), dtype=np.float64)
+        return X, cdist(X, self.centers_, metric="euclidean")
+
+    def decision_details(self, X):
+        """
+        Return exact firing diagnostics for each sample.
+
+        Margins are `radius - distance`, so positive values indicate firing.
+        """
+        X, D = self._distances(X)
         n = len(X)
         if self.centers_ is None or len(self.centers_) == 0:
-            return np.full(n, self.default_label)
+            empty_idx = np.full(n, -1, dtype=int)
+            empty_labels = np.full(n, self.default_label, dtype=object)
+            return {
+                "distances": D,
+                "margins": D,
+                "activated": np.zeros((n, 0), dtype=bool),
+                "nearest_idx": empty_idx,
+                "nearest_label": empty_labels,
+                "nearest_firing_idx": empty_idx,
+                "nearest_firing_label": empty_labels,
+                "predicted_labels": empty_labels,
+                "normalized_strength": np.zeros(n, dtype=np.float64),
+            }
 
-        C = self.centers_  # (P, F)
-        R = self.radii_    # (P,)
-        L = self.labels_   # (P,)
-        default = self.default_label
+        margins = self.radii_[np.newaxis, :] - D
+        activated = margins > 0
+        nearest_idx = np.argmin(D, axis=1)
+        nearest_label = self.labels_[nearest_idx]
 
-        chunk = 10000
-        results = []
-        for start in range(0, n, chunk):
-            Xb = X[start:start + chunk]   # (B, F)
-            D = cdist(Xb, C, metric="euclidean")  # (B, P)
-            # Mask distances >= radius (not activated)
-            D_masked = np.where(D < R[np.newaxis, :], D, np.inf)
-            best_idx = np.argmin(D_masked, axis=1)  # (B,)
-            best_d = D_masked[np.arange(len(Xb)), best_idx]
-            preds = np.where(best_d < np.inf, L[best_idx], default)
-            results.append(preds)
-        return np.concatenate(results)
+        masked = np.where(activated, D, np.inf)
+        nearest_firing_idx = np.argmin(masked, axis=1)
+        nearest_firing_distance = masked[np.arange(n), nearest_firing_idx]
+        has_fire = nearest_firing_distance < np.inf
+        nearest_firing_idx = np.where(has_fire, nearest_firing_idx, -1)
 
-    def predict_proba(self, X, sigma=0.1):
+        predicted_labels = np.full(n, self.default_label, dtype=object)
+        predicted_labels[has_fire] = self.labels_[nearest_firing_idx[has_fire]]
+
+        nearest_firing_label = np.full(n, self.default_label, dtype=object)
+        nearest_firing_label[has_fire] = self.labels_[nearest_firing_idx[has_fire]]
+
+        normalized_strength = np.zeros(n, dtype=np.float64)
+        if np.any(has_fire):
+            active_idx = nearest_firing_idx[has_fire]
+            active_dist = D[np.where(has_fire)[0], active_idx]
+            active_radius = self.radii_[active_idx]
+            normalized_strength[has_fire] = np.clip(1.0 - (active_dist / active_radius), 0.0, 1.0)
+
+        return {
+            "distances": D,
+            "margins": margins,
+            "activated": activated,
+            "nearest_idx": nearest_idx,
+            "nearest_label": nearest_label,
+            "nearest_firing_idx": nearest_firing_idx,
+            "nearest_firing_label": nearest_firing_label,
+            "predicted_labels": predicted_labels,
+            "normalized_strength": normalized_strength,
+        }
+
+    def score_samples(self, X, positive_label, allow_nearest_margin: bool = False):
         """
-        Output probability mode: p_i = exp(-sigma * d_i), summed by class,
-        normalised.  Returns (n_samples, n_classes).
+        Heuristic confidence aligned with firing geometry.
+
+        Scores use the normalized margin of the nearest firing prototype for the
+        positive label. If no positive prototype fires and `allow_nearest_margin`
+        is set, the score falls back to the clipped negative margin of the
+        nearest positive prototype.
         """
-        X = np.asarray(X, dtype=np.float64)
-        if X.ndim == 1:
-            X = X.reshape(1, -1)
+        details = self.decision_details(X)
+        scores = np.zeros(len(details["predicted_labels"]), dtype=np.float64)
+        fire_mask = details["predicted_labels"] == positive_label
+        scores[fire_mask] = details["normalized_strength"][fire_mask]
+
+        if allow_nearest_margin and self.labels_ is not None and np.any(self.labels_ == positive_label):
+            pos_mask = self.labels_ == positive_label
+            pos_dist = details["distances"][:, pos_mask]
+            pos_radius = self.radii_[pos_mask]
+            pos_margin = pos_radius[np.newaxis, :] - pos_dist
+            nearest_pos_margin = pos_margin.max(axis=1)
+            fallback = np.clip(nearest_pos_margin / np.maximum(pos_radius.max(), 1e-6), 0.0, 1.0)
+            scores = np.maximum(scores, fallback)
+        return scores
+
+    def predict(self, X):
+        """Predict labels from firing prototypes."""
+        details = self.decision_details(X)
+        return details["predicted_labels"]
+
+    def predict_proba(self, X, sigma: float = 0.1):
+        """
+        Heuristic probability mode: exp(-sigma * distance) summed by class.
+
+        This is kept for compatibility, but the benchmark visuals prefer exact
+        firing diagnostics from `decision_details` and `score_samples`.
+        """
+        X, D = self._distances(X)
         if self.centers_ is None or len(self.centers_) == 0:
             return np.ones((len(X), 1))
 
-        C = self.centers_
-        L = self.labels_
-        unique = []
-        for l in L:
-            if l not in unique:
-                unique.append(l)
+        labels = []
+        for label in self.labels_:
+            if label not in labels:
+                labels.append(label)
 
-        chunk = 10000
-        probs_list = []
-        for start in range(0, len(X), chunk):
-            Xb = X[start:start + chunk]
-            D = cdist(Xb, C, metric="euclidean")  # (B, P)
-            E = np.exp(-sigma * D)                 # (B, P)
-            class_probs = np.zeros((len(Xb), len(unique)))
-            for j, lbl in enumerate(unique):
-                mask = L == lbl
-                class_probs[:, j] = E[:, mask].sum(axis=1)
-            s = class_probs.sum(axis=1, keepdims=True)
-            s[s == 0] = 1.0
-            probs_list.append(class_probs / s)
-        return np.vstack(probs_list)
+        E = np.exp(-sigma * D)
+        class_probs = np.zeros((len(X), len(labels)))
+        for idx, label in enumerate(labels):
+            mask = self.labels_ == label
+            class_probs[:, idx] = E[:, mask].sum(axis=1)
+        denom = class_probs.sum(axis=1, keepdims=True)
+        denom[denom == 0] = 1.0
+        return class_probs / denom

@@ -1,0 +1,122 @@
+[
+  {
+    "episode_id": "stage1_artroom1",
+    "object_id": "artroom_target",
+    "object_name": "artroom target",
+    "scene_group": "artroom",
+    "stage": "stage1",
+    "window_size": [300, 300],
+    "train_variant": "artroom1",
+    "test_variant": "artroom1",
+    "train_view": "left",
+    "test_view": "right",
+    "train_annotation": {
+      "variant": "artroom1",
+      "view": "left",
+      "mask_path": null,
+      "bbox": [400, 700, 700, 1000]
+    },
+    "test_annotation": {
+      "variant": "artroom1",
+      "view": "right",
+      "mask_path": null,
+      "bbox": [291, 699, 591, 999]
+    }
+  },
+  {
+    "episode_id": "stage1_artroom2",
+    "object_id": "artroom_target",
+    "object_name": "artroom target",
+    "scene_group": "artroom",
+    "stage": "stage1",
+    "window_size": [300, 300],
+    "train_variant": "artroom2",
+    "test_variant": "artroom2",
+    "train_view": "left",
+    "test_view": "right",
+    "train_annotation": {
+      "variant": "artroom2",
+      "view": "left",
+      "mask_path": null,
+      "bbox": [1312, 296, 1775, 596]
+    },
+    "test_annotation": {
+      "variant": "artroom2",
+      "view": "right",
+      "mask_path": null,
+      "bbox": [1180, 298, 1656, 588]
+    }
+  },
+  {
+    "episode_id": "stage1_curule1",
+    "object_id": "curule_chair",
+    "object_name": "curule chair",
+    "scene_group": "curule",
+    "stage": "stage1",
+    "window_size": [300, 300],
+    "train_variant": "curule1",
+    "test_variant": "curule1",
+    "train_view": "left",
+    "test_view": "right",
+    "train_annotation": {
+      "variant": "curule1",
+      "view": "left",
+      "mask_path": null,
+      "bbox": [921, 163, 1381, 766]
+    },
+    "test_annotation": {
+      "variant": "curule1",
+      "view": "right",
+      "mask_path": null,
+      "bbox": [817, 159, 1275, 766]
+    }
+  },
+  {
+    "episode_id": "stage1_skates1",
+    "object_id": "skates_pair",
+    "object_name": "roller skates",
+    "scene_group": "skates",
+    "stage": "stage1",
+    "window_size": [300, 300],
+    "train_variant": "skates1",
+    "test_variant": "skates1",
+    "train_view": "left",
+    "test_view": "right",
+    "train_annotation": {
+      "variant": "skates1",
+      "view": "left",
+      "mask_path": null,
+      "bbox": [1281, 539, 1494, 775]
+    },
+    "test_annotation": {
+      "variant": "skates1",
+      "view": "right",
+      "mask_path": null,
+      "bbox": [992, 537, 1230, 779]
+    }
+  },
+  {
+    "episode_id": "stage1_skiboots1",
+    "object_id": "ski_boots",
+    "object_name": "ski boots",
+    "scene_group": "skiboots",
+    "stage": "stage1",
+    "window_size": [320, 320],
+    "train_variant": "skiboots1",
+    "test_variant": "skiboots1",
+    "train_view": "left",
+    "test_view": "right",
+    "train_annotation": {
+      "variant": "skiboots1",
+      "view": "left",
+      "mask_path": null,
+      "bbox": [392, 622, 905, 1062]
+    },
+    "test_annotation": {
+      "variant": "skiboots1",
+      "view": "right",
+      "mask_path": null,
+      "bbox": [255, 632, 758, 1062]
+    }
+  }
+]

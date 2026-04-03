@@ -17,6 +17,7 @@ results/logs/
 results/yolo/
 # Optional: Uncomment if you don't want to track generated plots
 results/plots/
+rce_benchmark/outputs/
 
 # --- 3b. TRAINING RUNS ---
 # YOLO training artifacts: batch images, curves, weights checkpoints
@@ -32,6 +33,11 @@ __pycache__/
 # --- 5. SYSTEM & IDE JUNK ---
 # Mac OS specific annoying file
 .DS_Store
+._*
+.ipynb_checkpoints/
+
+# Notebook-side temporary exports
+rce_benchmark/annotations/exports/
 
 # VS Code / PyCharm settings (Optional, but recommended)
 .vscode/

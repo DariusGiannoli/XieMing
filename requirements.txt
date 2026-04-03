@@ -5,6 +5,7 @@ pandas
 scipy
 tqdm
 plotly
+PyYAML
 torch
 torchvision
 timm
